@@ -111,7 +111,8 @@ pub fn create_demo_ports(now: u64) -> Ports {
         eth: 0.0412,
         terms,
     };
-    let entry = |time: &str, level, msg: &str, detail: &str, signal| LogEntry { time: time.into(), level, msg: msg.into(), detail: detail.into(), signal };
+    let entry =
+        |time: &str, level, msg: &str, detail: &str, signal| LogEntry { time: time.into(), at: None, level, msg: msg.into(), detail: detail.into(), signal };
     let log = vec![
         entry(
             "09:00:01",

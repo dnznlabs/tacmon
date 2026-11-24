@@ -41,6 +41,8 @@ pub struct State {
 
     pub id: Identity,
     pub cap: Capacity,
+    /// When the provider wrote the capacity line `cap` came from, where the line said.
+    pub cap_at: Option<u64>,
     pub terms: Option<Terms>,
     /// `Some(true)` healthy, `Some(false)` the provider says its last tick failed, `None` it does not answer.
     pub healthy: Option<bool>,
@@ -53,7 +55,9 @@ pub struct State {
     pub swaps_ok: bool,
     pub wants: Vec<Want>,
     pub ads: Vec<Ad>,
+    /// Whether the board's last answer for wants, and for ads, was read.
     pub board_ok: bool,
+    pub ads_ok: bool,
 
     pub deadline_warn_secs: u64,
     fee_ladder_bps: Vec<u64>,
@@ -69,6 +73,7 @@ impl State {
             only_warn: false,
             id: Identity { pool_account: cfg.pool_account.clone(), ..Default::default() },
             cap: Capacity::default(),
+            cap_at: None,
             terms: None,
             healthy: None,
             health_error: String::new(),
@@ -80,6 +85,7 @@ impl State {
             wants: Vec::new(),
             ads: Vec::new(),
             board_ok: false,
+            ads_ok: false,
             deadline_warn_secs: cfg.advisor.deadline_warn_secs,
             fee_ladder_bps: cfg.advisor.fee_ladder_bps.clone(),
             pool_account_fixed: !cfg.pool_account.is_empty(),
@@ -98,13 +104,15 @@ impl State {
             Event::Wants(w) => {
                 self.board_ok = w.is_some();
                 if let Some(mut w) = w {
-                    // amount 0 is how a bridger takes a want down
-                    w.retain(|w| w.amount > 0);
+                    // amount 0 is how a bridger takes a want down; one past its time is no longer waiting
+                    let now = self.now;
+                    w.retain(|w| w.amount > 0 && (w.until == 0 || now == 0 || w.until > now));
                     w.sort_by_key(|w| std::cmp::Reverse(w.amount));
                     self.wants = w;
                 }
             }
             Event::Ads(a) => {
+                self.ads_ok = a.is_some();
                 if let Some(mut a) = a {
                     a.sort_by_key(|a| effective_bps(100 * UNIT, a.terms.fee_bps, a.terms.flat));
                     self.ads = a;
@@ -147,12 +155,17 @@ impl State {
                 let pool = if self.pool_account_fixed { self.id.pool_account.clone() } else { id.pool_account.clone() };
                 self.id = Identity { pool_account: pool, ..id.clone() };
             }
-            Some(Signal::Capacity(c)) => self.cap = c.clone(),
+            Some(Signal::Capacity(c)) => {
+                self.cap = c.clone();
+                self.cap_at = entry.at;
+            }
             None => {}
         }
-        // a line that repeats the one before it (an explorer left alone, the hourly low-TAC warning) is counted, not listed again
+        // a line that repeats the one before it (an explorer left alone, the hourly low-TAC warning) is counted, not listed again.
+        // Same level only: an alert must not be folded into a quieter line that happens to share its words.
         if let Some(last) = self.log.back_mut()
             && last.entry.msg == entry.msg
+            && last.entry.level == entry.level
             && entry.msg != "swap"
             && entry.msg != "capacity"
         {
@@ -170,19 +183,36 @@ impl State {
     pub fn free(&self) -> u128 {
         self.terms.as_ref().and_then(|t| t.available).unwrap_or(self.cap.held.saturating_sub(self.cap.promised))
     }
+    /// `Some` when `free` is the log's word and not the provider's answer: how old that word is, where the line gave a time.
+    pub fn free_from_log(&self) -> Option<Option<u64>> {
+        self.terms.as_ref().and_then(|t| t.available).is_none().then(|| self.cap_at.map(|at| self.now.saturating_sub(at)))
+    }
     /// TAC on Bitcoin taken by finished swaps, by this data directory's records.
     pub fn received(&self) -> u128 {
-        self.swaps.iter().filter(|s| s.done()).map(|s| s.pays).sum()
+        total(self.swaps.iter().filter(|s| s.done()).map(|s| s.pays))
     }
     /// TAC on Bitcoin that open swaps will pay.
     pub fn incoming(&self) -> u128 {
-        self.swaps.iter().filter(|s| !s.closed()).map(|s| s.pays).sum()
+        total(self.swaps.iter().filter(|s| !s.closed()).map(|s| s.pays))
     }
     pub fn earned(&self) -> u128 {
-        self.swaps.iter().filter(|s| s.done()).map(Swap::fee).sum()
+        total(self.swaps.iter().filter(|s| s.done()).map(Swap::fee))
     }
+    /// Every ad posted under this provider's claim key. The board checks no signature, so anyone can post one.
+    fn my_ads(&self) -> impl Iterator<Item = &Ad> {
+        self.ads.iter().filter(|a| !self.id.claim_pub.is_empty() && a.claim_pub == self.id.claim_pub)
+    }
+    /// More than one ad uses this provider's key: at most one of them is its own.
+    pub fn ad_contested(&self) -> bool {
+        self.my_ads().nth(1).is_some()
+    }
+    /// The ad that is this provider's: the only one under its key, or among several the one carrying the terms it reports itself.
     pub fn my_ad(&self) -> Option<&Ad> {
-        self.ads.iter().find(|a| !self.id.claim_pub.is_empty() && a.claim_pub == self.id.claim_pub)
+        if !self.ad_contested() {
+            return self.my_ads().next();
+        }
+        let own = self.terms.as_ref()?;
+        self.my_ads().find(|a| (a.terms.min, a.terms.max, a.terms.fee_bps, a.terms.flat) == (own.min, own.max, own.fee_bps, own.flat))
     }
     pub fn name(&self) -> String {
         self.my_ad().map(|a| a.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "provider".into())
@@ -239,6 +269,68 @@ mod tests {
         st.apply(Event::Wants(None));
 
         assert_eq!((st.wants.len(), st.board_ok), (1, false));
+    }
+
+    #[test]
+    fn an_alert_is_not_folded_into_a_quieter_line_with_the_same_words() {
+        let mut st = state();
+
+        st.apply(Event::Log(LogEntry::plain(Level::Alert, "swap step failed")));
+        st.apply(Event::Log(LogEntry::plain(Level::Info, "swap step failed")));
+
+        let seen: Vec<(Level, u32)> = st.log.iter().map(|l| (l.entry.level, l.count)).collect();
+        assert_eq!(seen, [(Level::Alert, 1), (Level::Info, 1)]);
+    }
+
+    #[test]
+    fn a_second_ad_under_the_same_key_does_not_take_the_name() {
+        let mut st = state();
+        st.id.claim_pub = "02me".into();
+        let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None };
+        let ad = |name: &str, terms: Terms| Ad { name: name.into(), claim_pub: "02me".into(), terms, any_tac: false, reverse: false };
+        st.apply(Event::Ads(Some(vec![ad("impostor", Terms { fee_bps: 1, ..own.clone() }), ad("dx-lp", own.clone())])));
+        let before_terms = (st.ad_contested(), st.name());
+
+        st.apply(Event::Terms(Some(own)));
+
+        assert_eq!((before_terms, st.name()), ((true, "provider".to_string()), "dx-lp".to_string()));
+    }
+
+    #[test]
+    fn free_read_from_the_log_says_so_and_how_old_it_is() {
+        let mut st = state();
+        st.now = 1_000;
+        st.apply(Event::Log(LogEntry {
+            at: Some(400),
+            signal: Some(Signal::Capacity(Capacity { held: 500, promised: 200, open: 1, holds: 0 })),
+            ..LogEntry::plain(Level::Info, "capacity")
+        }));
+        let from_log = st.free_from_log();
+
+        st.apply(Event::Terms(Some(Terms { available: Some(250), ..Default::default() })));
+
+        assert_eq!((from_log, st.free_from_log()), (Some(Some(600)), None));
+    }
+
+    #[test]
+    fn wants_past_their_time_are_not_counted_as_waiting() {
+        let mut st = state();
+        st.now = 1_000;
+        let want = |until| Want { amount: 5, max_fee_bps: None, until };
+
+        st.apply(Event::Wants(Some(vec![want(999), want(1_001), want(0)])));
+
+        assert_eq!(st.wants.len(), 2);
+    }
+
+    #[test]
+    fn ads_that_cannot_be_read_mark_the_board_as_not_answering() {
+        let mut st = state();
+        st.apply(Event::Ads(Some(vec![])));
+
+        st.apply(Event::Ads(None));
+
+        assert!(!st.ads_ok);
     }
 
     #[test]

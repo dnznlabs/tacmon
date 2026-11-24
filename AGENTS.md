@@ -59,7 +59,7 @@ For anyone changing this repo, human or agent.
 - A change that makes a claim in `SECURITY.md` untrue changes the claim in the same commit.
 - A new dependency licence, a git dependency or an ignored advisory is an edit to `deny.toml` with its reason.
 - Audits are append-only: a past `audits/<date>/` is never edited. A wrong finding is corrected in the next `AUDIT.md`, marked as superseding.
-- A fix for a finding comes with a test that fails without it.
+- A fix for a finding comes with a test that fails without it, and a row in `audits/TRIAGE.md`.
 
 ## Conventions
 
@@ -67,7 +67,8 @@ For anyone changing this repo, human or agent.
 - **The memory adapter is the contract.** Tests substitute it for the real ones. A new port gets its memory implementation in the same change.
 - **A new monitor** is a directory under `src/monitors/` with the same shape, a section in `Config`, and a line in `create_monitors`. Nothing in `src/shell/` changes.
 - **Wire formats stay in `adapters/wire.rs`.** The provider's log messages and record fields are not a stable interface: read them leniently, and show what is not recognised as it is.
-- **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering.
+- **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering. A failed status, or an answer missing what it must carry, is a failed read.
+- **Amounts from outside never wrap or truncate.** Sum with `model::total`, multiply through `model::fee_on`, narrow with `try_from`.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.
 - **Swapping what is behind a port touches one directory.** If changing a transport or a data source forces edits in `feed`, `state` or `ui`, the port is leaking: fix that first.

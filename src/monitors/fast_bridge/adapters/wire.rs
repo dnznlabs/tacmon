@@ -20,19 +20,25 @@ fn field(v: &Value, key: &str) -> u128 {
     v.get(key).and_then(units).unwrap_or(0)
 }
 
+/// A count or a time: one too large to hold is the largest there is, never its low bits.
+fn small(v: &Value, key: &str) -> u64 {
+    u64::try_from(field(v, key)).unwrap_or(u64::MAX)
+}
+
 fn text(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// `/info`, and the same fields in a board ad.
-pub fn terms(v: &Value) -> Terms {
-    Terms {
-        min: field(v, "minAmount"),
-        max: field(v, "maxAmount"),
-        fee_bps: field(v, "feeBps") as u64,
+/// `/info`, and the same fields in a board ad. `None` when the size range or the fee is not there to read:
+/// terms of all zeros would be drawn as real ones.
+pub fn terms(v: &Value) -> Option<Terms> {
+    Some(Terms {
+        min: v.get("minAmount").and_then(units)?,
+        max: v.get("maxAmount").and_then(units)?,
+        fee_bps: u64::try_from(v.get("feeBps").and_then(units)?).unwrap_or(u64::MAX),
         flat: field(v, "flatFee"),
         available: v.get("available").and_then(units),
-    }
+    })
 }
 
 pub fn health(v: &Value) -> Health {
@@ -45,8 +51,8 @@ pub fn swap(v: &Value) -> Option<Swap> {
     Some(Swap {
         id: text(v, "id"),
         phase: text(v, "phase"),
-        created: field(v, "created") as u64,
-        deadline: field(v, "deadline") as u64,
+        created: small(v, "created"),
+        deadline: small(v, "deadline"),
         pays: field(offer.get("btc")?, "value"),
         gets: field(offer.get("evm")?, "amount"),
         lock_txid: text(v, "lockTxid"),
@@ -54,17 +60,36 @@ pub fn swap(v: &Value) -> Option<Swap> {
 }
 
 pub fn want(v: &Value) -> Want {
-    Want { amount: field(v, "amount"), max_fee_bps: v.get("maxFeeBps").and_then(Value::as_u64), until: field(v, "until") as u64 }
+    // a cap that is there but cannot be read is the strictest cap, not "any fee"
+    let max_fee_bps = match v.get("maxFeeBps") {
+        None | Some(Value::Null) => None,
+        Some(cap) => Some(units(cap).map_or(0, |c| u64::try_from(c).unwrap_or(u64::MAX))),
+    };
+    Want { amount: field(v, "amount"), max_fee_bps, until: small(v, "until") }
 }
 
-pub fn ad(v: &Value) -> Ad {
-    Ad {
+/// `None` for an ad without readable terms: it is left out of the market, not listed at a fee of zero.
+pub fn ad(v: &Value) -> Option<Ad> {
+    Some(Ad {
         name: text(v, "name"),
         claim_pub: text(v, "claimPub"),
-        terms: terms(v),
+        terms: terms(v)?,
         any_tac: v.get("anyTac").and_then(Value::as_bool).unwrap_or(false),
         reverse: v.get("reverse").is_some_and(|r| !r.is_null() && r != &Value::Bool(false)),
+    })
+}
+
+/// "2026-11-24T05:51:50.890Z" as seconds since 1970. UTC only, which is what the provider writes.
+fn epoch(ts: &str) -> Option<u64> {
+    let n = |r: std::ops::Range<usize>| ts.get(r)?.parse::<u64>().ok();
+    let (y, m, d, h, mi, s) = (n(0..4)?, n(5..7)?, n(8..10)?, n(11..13)?, n(14..16)?, n(17..19)?);
+    if y < 1970 || !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
     }
+    // days from the civil date, counting years from March so the leap day falls last
+    let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let days = y * 365 + y / 4 - y / 100 + y / 400 + (m * 153 + 2) / 5 + d - 1;
+    Some((days.checked_sub(719_468)?) * 86_400 + h * 3600 + mi * 60 + s)
 }
 
 /// One line of the provider's log. `None` only for a blank line: anything that is not its JSON is shown as it is.
@@ -80,12 +105,12 @@ pub fn log_line(raw: &str) -> Option<LogEntry> {
             pool_account: text(&v, "poolAccount"),
             dry_run: v.get("dryRun").and_then(Value::as_bool).unwrap_or(false),
         })),
-        "capacity" => Some(Signal::Capacity(Capacity {
-            held: field(&v, "held"),
-            promised: field(&v, "promised"),
-            open: field(&v, "open") as u64,
-            holds: field(&v, "holds") as u64,
-        })),
+        // without both amounts it is a line to show, not capacity to believe
+        "capacity" => v
+            .get("held")
+            .and_then(units)
+            .zip(v.get("promised").and_then(units))
+            .map(|(held, promised)| Signal::Capacity(Capacity { held, promised, open: small(&v, "open"), holds: small(&v, "holds") })),
         _ => None,
     };
     let level = match text(&v, "level").as_str() {
@@ -95,7 +120,8 @@ pub fn log_line(raw: &str) -> Option<LogEntry> {
     };
     // "2026-11-24T05:51:50.890Z" -> "05:51:50"
     let time = v.get("ts").and_then(Value::as_str).and_then(|t| t.get(11..19)).unwrap_or("--:--:--").to_string();
-    Some(LogEntry { time, level, detail: detail(&msg, &v), msg, signal })
+    let at = v.get("ts").and_then(Value::as_str).and_then(epoch);
+    Some(LogEntry { time, at, level, detail: detail(&msg, &v), msg, signal })
 }
 
 /// The rest of a log line as "key value" pairs, with the amounts and the long hex made readable.
@@ -164,9 +190,54 @@ mod tests {
 
         let e = log_line(raw).expect("an entry");
 
-        assert_eq!(e.time, "05:51:50");
+        assert_eq!((e.time.as_str(), e.at), ("05:51:50", Some(1_795_499_510)));
         assert!(matches!(e.signal, Some(Signal::Capacity(Capacity { held: 24_900_000_000, promised: 24_900_000_000, open: 1, holds: 1 }))));
         assert!(e.detail.contains("held 249.00"));
+    }
+
+    #[test]
+    fn answer_without_terms_is_not_read_as_zero_terms() {
+        let answers = [json!({}), json!({ "error": "not found" }), json!({ "minAmount": "1", "maxAmount": "2" })];
+
+        let read = answers.each_ref().map(terms);
+
+        assert_eq!(read, [None, None, None]);
+    }
+
+    #[test]
+    fn ad_without_terms_is_left_out() {
+        let posted = json!({ "name": "cheap", "claimPub": "02aa" });
+
+        let a = ad(&posted);
+
+        assert_eq!(a, None);
+    }
+
+    #[test]
+    fn fee_cap_that_cannot_be_read_is_the_strictest_cap() {
+        let posted = [json!({ "amount": "5", "maxFeeBps": "10" }), json!({ "amount": "5", "maxFeeBps": -1 }), json!({ "amount": "5", "maxFeeBps": 10.5 })];
+
+        let caps = posted.each_ref().map(|p| want(p).max_fee_bps);
+
+        assert_eq!(caps, [Some(10), Some(0), Some(0)]);
+    }
+
+    #[test]
+    fn numbers_too_large_to_hold_are_not_cut_to_their_low_bits() {
+        let posted = json!({ "minAmount": "1", "maxAmount": "2", "feeBps": "18446744073709551617" });
+
+        let t = terms(&posted).expect("terms");
+
+        assert_eq!(t.fee_bps, u64::MAX);
+    }
+
+    #[test]
+    fn capacity_line_without_its_amounts_carries_no_signal() {
+        let raw = r#"{"ts":"2026-11-24T05:51:50.890Z","level":"info","msg":"capacity","held":"lots"}"#;
+
+        let e = log_line(raw).expect("an entry");
+
+        assert!(e.signal.is_none());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! What the waiting bridges say about a provider's terms. Arithmetic only: no state, no I/O.
 
-use super::model::{Terms, Want, effective_bps, fee_on};
+use super::model::{Terms, Want, effective_bps, fee_on, total};
 
 /// Why a provider with these terms and this much free TAC is not taking a waiting bridge, or `None` when it could.
 pub fn blocker(terms: &Terms, free: u128, w: &Want) -> Option<&'static str> {
@@ -52,8 +52,8 @@ pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64]) -> Advice {
             FeeRow {
                 bps,
                 count: fits.len(),
-                volume: fits.iter().map(|w| w.amount).sum(),
-                revenue: fits.iter().map(|w| fee_on(w.amount, bps, terms.flat)).sum(),
+                volume: total(fits.iter().map(|w| w.amount)),
+                revenue: total(fits.iter().map(|w| fee_on(w.amount, bps, terms.flat))),
                 current: bps == terms.fee_bps,
             }
         })
@@ -63,9 +63,9 @@ pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64]) -> Advice {
         // `max_by_key` keeps the last of equals, so reversed it keeps the lowest fee among ties
         best_bps: ladder.iter().rev().max_by_key(|r| r.revenue).filter(|r| r.revenue > 0).map(|r| r.bps),
         ladder,
-        in_range_volume: wants.iter().filter(in_range).map(|w| w.amount).sum(),
+        in_range_volume: total(wants.iter().filter(in_range).map(|w| w.amount)),
         over_count: over.len(),
-        over_volume: over.iter().map(|w| w.amount).sum(),
+        over_volume: total(over.iter().map(|w| w.amount)),
         largest: wants.iter().map(|w| w.amount).max().unwrap_or(0),
         under_count: wants.iter().filter(|w| w.amount < terms.min).count(),
     }

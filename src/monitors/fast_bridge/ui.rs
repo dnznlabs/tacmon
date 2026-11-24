@@ -39,7 +39,13 @@ pub fn header(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let free = st.free();
     let money = Line::from(vec![
         label("free "),
-        Span::styled(tac(free), bold.fg(if free == 0 { th.warn } else { th.good })),
+        Span::styled(tac(free), bold.fg(if free == 0 || st.free_from_log().is_some() { th.warn } else { th.good })),
+        // the provider's own answer is not behind this number: say whose word it is and how old
+        match st.free_from_log() {
+            Some(Some(age)) => Span::styled(format!(" (from the log, {} ago)", dur(age)), Style::new().fg(th.warn)),
+            Some(None) => Span::styled(" (from the log)", Style::new().fg(th.warn)),
+            None => Span::raw(""),
+        },
         label("   promised "),
         Span::styled(tac(st.cap.promised), bold),
         label("   held "),
@@ -56,8 +62,9 @@ pub fn header(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         light(st.healthy, th),
         label(" health   "),
         // unknown, not red, while the board itself is not answering
-        light(st.board_ok.then(|| st.my_ad().is_some()), th),
+        light(st.ads_ok.then(|| st.my_ad().is_some()), th),
         label(" on board   "),
+        if st.ad_contested() { Span::styled("another ad uses your key   ", Style::new().fg(th.bad)) } else { Span::raw("") },
         light(Some(st.swaps_ok), th),
         label(" records   "),
         match &st.terms {
@@ -213,7 +220,7 @@ fn demand(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             ])
         })
         .collect();
-    let total: u128 = st.wants.iter().map(|w| w.amount).sum();
+    let total = total(st.wants.iter().map(|w| w.amount));
     let takeable = st.wants.iter().filter(|w| st.blocker(w) == Some(None)).count();
     let title = if st.board_ok {
         format!(" Bridgers waiting · {} · {} TAC · {takeable} you can take ", st.wants.len(), tac(total))

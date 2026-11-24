@@ -19,8 +19,14 @@ pub fn tac(u: u128) -> String {
 }
 
 /// The whole fee on `amount` at `bps` plus `flat`.
+/// Board amounts are anyone's to post, so nothing here may wrap: a fee too large to hold is the largest there is.
 pub fn fee_on(amount: u128, bps: u64, flat: u128) -> u128 {
-    amount * u128::from(bps) / 10_000 + flat
+    amount.checked_mul(u128::from(bps)).map_or(u128::MAX, |share| (share / 10_000).saturating_add(flat))
+}
+
+/// A sum that stops at the top instead of wrapping round to a small number.
+pub fn total(amounts: impl Iterator<Item = u128>) -> u128 {
+    amounts.fold(0, u128::saturating_add)
 }
 
 /// That fee as a share of the amount, in hundredths of a percent. Rounded up: a cap is met or it is not.
@@ -28,7 +34,7 @@ pub fn effective_bps(amount: u128, bps: u64, flat: u128) -> u64 {
     if amount == 0 {
         return u64::MAX;
     }
-    (fee_on(amount, bps, flat) * 10_000).div_ceil(amount) as u64
+    fee_on(amount, bps, flat).checked_mul(10_000).and_then(|f| u64::try_from(f.div_ceil(amount)).ok()).unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +48,8 @@ pub enum Level {
 pub struct LogEntry {
     /// "HH:MM:SS", UTC, as the provider writes it.
     pub time: String,
+    /// Seconds since 1970 when the provider wrote it, where the line says.
+    pub at: Option<u64>,
     pub level: Level,
     pub msg: String,
     pub detail: String,
@@ -52,7 +60,7 @@ pub struct LogEntry {
 impl LogEntry {
     /// A line that is not the provider's own (a reader's trouble, a stack trace).
     pub fn plain(level: Level, msg: impl Into<String>) -> Self {
-        Self { time: "--:--:--".into(), level, msg: msg.into(), detail: String::new(), signal: None }
+        Self { time: "--:--:--".into(), at: None, level, msg: msg.into(), detail: String::new(), signal: None }
     }
 }
 
@@ -158,6 +166,15 @@ mod tests {
         let gets = pays - fee_on(pays, bps, flat);
 
         assert_eq!(gets, 24_900_000_000);
+    }
+
+    #[test]
+    fn amounts_too_large_to_hold_stop_at_the_top_and_never_wrap() {
+        let huge = u128::MAX / 2;
+
+        let (fee, eff, sum) = (fee_on(huge, 10_000, huge), effective_bps(100 * UNIT, u64::MAX, u128::MAX), total([huge, huge, huge].into_iter()));
+
+        assert_eq!((fee, eff, sum), (u128::MAX, u64::MAX, u128::MAX));
     }
 
     #[test]

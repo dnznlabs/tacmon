@@ -52,12 +52,12 @@ These are what the review is told to break. Each names what holds it up.
 | 1 | No private key is read, requested or stored. | review; there is no code path that takes one |
 | 2 | Nothing is written to disk and no service is changed: every request is a read. | review |
 | 3 | No `unsafe` in this crate. | `#![forbid(unsafe_code)]`, enforced by the compiler; `make audit-checks` |
-| 4 | The only outbound connections are to hosts in the config; `--demo` makes none. | review |
+| 4 | The only outbound connections are to hosts in the config, through the system proxy where one is set. A redirect is an error and is never followed. `--demo` makes none. | tests; review |
 | 5 | The only process started is `log_cmd`, with its arguments passed as a list and never through a shell. | review |
 | 6 | TLS is rustls with the platform's certificate checks; there is no way to switch verification off. | `deny.toml` bans other TLS stacks; review |
 | 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. | review |
-| 8 | No input from an untrusted source can panic the process, hang it or grow memory without bound. | review; the `panic-surface` report lists every place a panic could start |
-| 9 | A read that fails shows as failed. A stale or missing value is never drawn as a fresh one. | tests; review |
+| 8 | No input from an untrusted source can panic the process, hang it or grow memory without bound: an answer is refused over 4 MiB, a log line is cut at 64 KiB, a swap record is skipped over 1 MiB, and amounts that would overflow stop at the largest value. | tests; review; the `panic-surface` report lists every place a panic could start |
+| 9 | A read that fails shows as failed. A stale or missing value is never drawn as a fresh one: a failed status or an answer without terms is a failed read, and a figure taken from the log says so and gives its age. | tests; review |
 | 10 | Dependencies come from crates.io, carry no known advisory, and use permissive licences. | `cargo-deny` against `deny.toml` |
 
 A claim that turns out false is a finding. The latest review says which ones held.
@@ -77,6 +77,13 @@ The method, its limits and every past review are in [`audits/`](audits/README.md
 
 - The services tacmon watches, and the machine it runs on.
 - An attacker who can already edit the config file or the binary.
+- **Another user on the same machine.** Whatever answers on the provider's port is believed, so a local user who
+  takes that port while the provider is down can show a healthy one. Run the provider and tacmon on a machine
+  you do not share.
+- **An ad posted under your key.** The board checks no signature. tacmon says when more than one ad uses the
+  provider's key and does not take its name from one that carries other terms, but it cannot remove it.
+- **Text that only looks wrong.** Control characters never reach the terminal, but invisible and
+  direction-changing Unicode characters in a name do.
 - Bugs in dependencies that no advisory describes yet.
 - Whether a number is *right*: the reviews look for ways to make tacmon show something false, not for errors
   in the provider it is reading.

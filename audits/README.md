@@ -38,6 +38,7 @@ audits/
   README.md                          this file
   SCOPE                              the files reviewed, one per line, and the exclusions with reasons
   KNOWN_ANSWER.md                    optional: a finding known before the run, to grade the legs
+  TRIAGE.md                          what was done about every finding of every run, newest first
   prompts/
     leg.md                           the prompt each independent review receives
     rollup.md                        the prompt that reconciles a run
@@ -137,7 +138,8 @@ dirty` says whether anything else was uncommitted, the method's own files includ
 
 ## After a run
 
-1. Read `AUDIT.md`. Triage each finding: fix it, or write down why not.
+1. Read `AUDIT.md`. Triage each finding in `TRIAGE.md`: fixed, with the test that holds it; accepted, with the
+   reason; or open. `AUDIT.md` itself is never edited.
 2. A fix comes with a test that fails without it.
 3. A claim in `SECURITY.md` that was broken is fixed in the code or withdrawn from the document. It does not
    stay as written.
