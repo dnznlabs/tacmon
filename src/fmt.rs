@@ -21,7 +21,7 @@ pub fn dur(secs: u64) -> String {
     }
 }
 
-/// "02cd4e8b…5455a8". Left whole when it is already short, or not ASCII (a byte index would split a character).
+/// "02a1b2c3…7e8f90". Left whole when it is already short, or not ASCII (a byte index would split a character).
 pub fn short(s: &str, head: usize, tail: usize) -> String {
     if s.len() <= head + tail + 1 || !s.is_ascii() {
         return s.to_string();
@@ -35,10 +35,10 @@ mod tests {
 
     #[test]
     fn formats_percent_duration_and_long_hex() {
-        let (bps, secs, hex) = (150, 3 * 3600 + 12 * 60, "02cd4e8b0afb64a927a2e762c15455a8");
+        let (bps, secs, hex) = (150, 3 * 3600 + 12 * 60, "02a1b2c3d4e5f60718293a4b5c7e8f90");
 
         let out = (pct(bps), dur(secs), short(hex, 8, 6));
 
-        assert_eq!(out, ("1.50%".to_string(), "3h12m".to_string(), "02cd4e8b…5455a8".to_string()));
+        assert_eq!(out, ("1.50%".to_string(), "3h12m".to_string(), "02a1b2c3…7e8f90".to_string()));
     }
 }

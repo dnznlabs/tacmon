@@ -5,8 +5,8 @@ here is the reasoning, the checks and the review records, so the claims can be c
 
 ## Reporting a problem
 
-Open a private security advisory on the repository (Security → Report a vulnerability). Please do not open a
-public issue for something that could be used against an operator.
+Open an issue on the repository. tacmon holds no keys and changes nothing, so a problem in it is best fixed in the
+open. A pull request with a test that fails without the fix is better still.
 
 ## What tacmon is trusted with
 
