@@ -53,8 +53,9 @@ pub fn swap(v: &Value) -> Option<Swap> {
         phase: text(v, "phase"),
         created: small(v, "created"),
         deadline: small(v, "deadline"),
-        pays: field(offer.get("btc")?, "value"),
-        gets: field(offer.get("evm")?, "amount"),
+        // an offer without both amounts is not a swap to count: zeros would understate what is at stake
+        pays: offer.get("btc")?.get("value").and_then(units)?,
+        gets: offer.get("evm")?.get("amount").and_then(units)?,
         lock_txid: text(v, "lockTxid"),
     })
 }
@@ -92,10 +93,26 @@ fn epoch(ts: &str) -> Option<u64> {
     Some((days.checked_sub(719_468)?) * 86_400 + h * 3600 + mi * 60 + s)
 }
 
+/// The most of one line that is kept for the screen. Thousands of lines are held, so this is far under what is read.
+const MAX_KEPT: usize = 2048;
+
+/// Cut at `MAX_KEPT` bytes, on a character boundary, with a mark that it was cut.
+fn kept(mut s: String) -> String {
+    if s.len() > MAX_KEPT {
+        let mut end = MAX_KEPT;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+        s.push('…');
+    }
+    s
+}
+
 /// One line of the provider's log. `None` only for a blank line: anything that is not its JSON is shown as it is.
 pub fn log_line(raw: &str) -> Option<LogEntry> {
     let Ok(v) = serde_json::from_str::<Value>(raw) else {
-        return (!raw.trim().is_empty()).then(|| LogEntry::plain(Level::Info, raw.trim()));
+        return (!raw.trim().is_empty()).then(|| LogEntry::plain(Level::Info, kept(raw.trim().to_string())));
     };
     let msg = text(&v, "msg");
     let signal = match msg.as_str() {
@@ -121,7 +138,7 @@ pub fn log_line(raw: &str) -> Option<LogEntry> {
     // "2026-11-24T05:51:50.890Z" -> "05:51:50"
     let time = v.get("ts").and_then(Value::as_str).and_then(|t| t.get(11..19)).unwrap_or("--:--:--").to_string();
     let at = v.get("ts").and_then(Value::as_str).and_then(epoch);
-    Some(LogEntry { time, at, level, detail: detail(&msg, &v), msg, signal })
+    Some(LogEntry { time, at, level, detail: kept(detail(&msg, &v)), msg: kept(msg), signal })
 }
 
 /// The rest of a log line as "key value" pairs, with the amounts and the long hex made readable.
@@ -139,7 +156,7 @@ fn detail(msg: &str, v: &Value) -> String {
             Value::Null | Value::Object(_) => continue,
             Value::Array(a) => format!("[{}]", a.len()),
             // TAC base units wherever the provider logs them under these names
-            _ if matches!(k.as_str(), "free" | "held" | "promised") => tac(units(val).unwrap_or(0)),
+            _ if matches!(k.as_str(), "free" | "held" | "promised") && units(val).is_some() => tac(units(val).unwrap_or(0)),
             Value::String(s) if s.len() > 24 && s.chars().all(|c| c.is_ascii_hexdigit() || c == 'x') => short(s, 8, 6),
             Value::String(s) => s.clone(),
             other => other.to_string(),
@@ -164,6 +181,33 @@ mod tests {
         let s = swap(&record).expect("a swap");
 
         assert_eq!((s.pays, s.gets, s.fee(), s.closed()), (25_289_340_101, 24_900_000_000, 389_340_101, false));
+    }
+
+    #[test]
+    fn record_whose_offer_lacks_an_amount_is_not_counted_as_a_swap_of_zero() {
+        let record = json!({ "id": "aa11", "phase": "locking", "offer": { "btc": {}, "evm": { "amount": "24900000000" } } });
+
+        let s = swap(&record);
+
+        assert_eq!(s, None);
+    }
+
+    #[test]
+    fn a_long_line_is_kept_short_and_cut_on_a_character() {
+        let raw = "é".repeat(MAX_KEPT);
+
+        let e = log_line(&raw).expect("an entry");
+
+        assert_eq!((e.msg.len(), e.msg.chars().last()), (MAX_KEPT + '…'.len_utf8(), Some('…')));
+    }
+
+    #[test]
+    fn an_amount_that_cannot_be_read_is_shown_as_written_not_as_zero() {
+        let raw = r#"{"msg":"low","free":"lots"}"#;
+
+        let e = log_line(raw).expect("an entry");
+
+        assert_eq!(e.detail, "free lots");
     }
 
     #[test]

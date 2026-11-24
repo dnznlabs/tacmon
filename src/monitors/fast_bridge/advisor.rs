@@ -47,8 +47,13 @@ pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64]) -> Advice {
     let ladder: Vec<FeeRow> = fees
         .into_iter()
         .map(|bps| {
-            let fits: Vec<&Want> =
-                wants.iter().filter(in_range).filter(|w| w.max_fee_bps.is_none_or(|cap| effective_bps(w.amount, bps, terms.flat) <= cap)).collect();
+            let fits: Vec<&Want> = wants
+                .iter()
+                .filter(in_range)
+                .filter(|w| w.max_fee_bps.is_none_or(|cap| effective_bps(w.amount, bps, terms.flat) <= cap))
+                // a bridge smaller than its own fee is never made, so it earns nothing
+                .filter(|w| fee_on(w.amount, bps, terms.flat) < w.amount)
+                .collect();
             FeeRow {
                 bps,
                 count: fits.len(),
@@ -113,6 +118,16 @@ mod tests {
         let a = advise(&t, &wants, &[]);
 
         assert_eq!((a.over_count, a.over_volume, a.largest, a.under_count, a.in_range_volume), (2, 2900 * UNIT, 2000 * UNIT, 1, 100 * UNIT));
+    }
+
+    #[test]
+    fn a_bridge_smaller_than_its_fee_earns_nothing() {
+        let t = Terms { min: 0, ..terms() };
+        let dust = [Want { amount: 1, max_fee_bps: None, until: 0 }; 3];
+
+        let a = advise(&t, &dust, &[]);
+
+        assert_eq!((a.ladder[0].count, a.ladder[0].revenue, a.best_bps), (0, 0, None));
     }
 
     #[test]

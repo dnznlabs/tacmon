@@ -35,7 +35,9 @@ pub struct FastBridge {
 
 pub fn create_fast_bridge(cfg: &FastBridgeConfig, demo: bool) -> FastBridge {
     let ports = if demo { adapters::memory::create_demo_ports(now()) } else { adapters::create_ports(cfg) };
-    FastBridge { cfg: cfg.clone(), state: State::new(cfg, ports.gas.is_some()), ports: Some(ports), events: None }
+    // a demo shows nothing of the operator's: the pool account in their config would otherwise sit in the header
+    let cfg = if demo { FastBridgeConfig { pool_account: String::new(), ..cfg.clone() } } else { cfg.clone() };
+    FastBridge { state: State::new(&cfg, ports.gas.is_some()), cfg, ports: Some(ports), events: None }
 }
 
 impl Monitor for FastBridge {
@@ -81,5 +83,19 @@ impl Monitor for FastBridge {
             Page::Activity => "↑↓ scroll · g newest · w warnings only",
             _ => "↑↓ scroll",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_demo_shows_nothing_from_the_operators_config() {
+        let cfg = FastBridgeConfig { pool_account: "0xmine".into(), ..Default::default() };
+
+        let (demo, live) = (create_fast_bridge(&cfg, true), create_fast_bridge(&cfg, false));
+
+        assert_eq!((demo.state.id.pool_account.as_str(), demo.cfg.pool_account.as_str(), live.state.id.pool_account.as_str()), ("", "", "0xmine"));
     }
 }

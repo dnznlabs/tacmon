@@ -128,7 +128,7 @@ impl Swap {
 }
 
 /// A bridge no provider online could take when it was posted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Want {
     pub amount: u128,
     pub max_fee_bps: Option<u64>,

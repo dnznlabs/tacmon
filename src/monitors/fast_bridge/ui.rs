@@ -166,7 +166,8 @@ fn overview(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
                 right(tac(s.pays)),
                 right(tac(s.gets)),
                 right(tac(s.fee())).style(Style::new().fg(th.accent)),
-                Cell::from(dur(st.now.saturating_sub(s.created))),
+                // a record that does not say when it began has no age, not one counted from 1970
+                if s.created == 0 { Cell::from("—") } else { Cell::from(dur(st.now.saturating_sub(s.created))) },
                 deadline,
                 Cell::from(short(&s.lock_txid, 8, 4)).style(th.dim()),
             ])
@@ -249,7 +250,7 @@ fn demand(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             Row::new(vec![
                 right(tac(w.amount)),
                 right(w.max_fee_bps.map(pct).unwrap_or_else(|| "any".into())),
-                right(dur(w.until.saturating_sub(st.now))),
+                right(if w.until == 0 { "—".into() } else { dur(w.until.saturating_sub(st.now)) }),
                 verdict,
             ])
         })

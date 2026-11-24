@@ -12,6 +12,9 @@ use std::time::Duration;
 /// The most one answer may hold. The board's lists are a few kilobytes; this is room to grow, not a target.
 const MAX_BODY: usize = 4 << 20;
 
+/// The most entries taken from one board list. The public board holds tens; past this it is a flood, not demand.
+const MAX_ITEMS: usize = 5_000;
+
 /// No redirects: a 3xx would send a request, and the pool account in it, to a host the operator never named.
 pub fn create_http_client() -> reqwest::Client {
     reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::none()).user_agent("tacmon").build().expect("http client")
@@ -89,7 +92,8 @@ impl HttpBoard {
         let mut out = None::<Vec<Value>>;
         for b in &self.boards {
             let Ok(v) = get(&self.http, &format!("{b}/{path}")).await else { continue };
-            let Some(items) = v.get(path).and_then(Value::as_array) else { continue };
+            // a flooded list is not read at all: part of it would be drawn as the whole market
+            let Some(items) = v.get(path).and_then(Value::as_array).filter(|items| items.len() <= MAX_ITEMS) else { continue };
             out.get_or_insert_with(Vec::new).extend(items.iter().cloned());
         }
         out.ok_or_else(|| anyhow!("no board answered /{path}"))
@@ -185,6 +189,16 @@ mod tests {
         let health = create_http_provider(create_http_client(), &base).health().await;
 
         assert!(health.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_flooded_board_list_is_a_failed_read() {
+        let body: &'static str = Box::leak(format!(r#"{{"wants":[{}]}}"#, vec![r#"{"amount":"1"}"#; MAX_ITEMS + 1].join(",")).into_boxed_str());
+        let base = serve_once("200 OK".into(), body).await;
+
+        let wants = create_http_board(create_http_client(), &[base]).wants().await;
+
+        assert!(wants.is_err());
     }
 
     #[test]

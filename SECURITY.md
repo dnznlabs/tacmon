@@ -55,7 +55,7 @@ These are what the review is told to break. Each names what holds it up.
 | 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. `--demo` makes none. | tests; review |
 | 5 | The only process started is `log_cmd`, with its arguments passed as a list and never through a shell. | review |
 | 6 | TLS is rustls with the platform's certificate checks; there is no way to switch verification off. | `deny.toml` bans other TLS stacks; review |
-| 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. | review |
+| 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. | a test that draws control characters; review |
 | 8 | No input from an untrusted source can panic the process, hang it or grow memory without bound: an answer is refused over 4 MiB, a log line is cut at 64 KiB, a swap record is skipped over 1 MiB, and amounts that would overflow stop at the largest value. | tests; review; the `panic-surface` report lists every place a panic could start |
 | 9 | A read that fails shows as failed. A stale or missing value is never drawn as a fresh one: a failed status or an answer without terms is a failed read, and a figure taken from the log says so and gives its age. | tests; review |
 | 10 | Dependencies come from crates.io, carry no known advisory, and use permissive licences. | `cargo-deny` against `deny.toml` |

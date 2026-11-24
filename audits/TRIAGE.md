@@ -15,13 +15,13 @@ them through gaps in the first round's own fixes.
 | F-2 | Market and Advisor draw stale board data as current; expired wants kept | **Fixed.** Both titles say when the board does not answer, and a want is dropped when its time passes | `state::tests::a_want_stops_waiting_when_its_time_passes_without_a_new_answer`; the titles are not under test |
 | F-3 | Log figures carry no source or age; no capacity line drawn as 0.00 | **Fixed.** Promised and held carry the log's age; before any capacity line they are a dash | `state::tests::free_is_not_known_before_anything_has_said`; the drawing is not under test |
 | F-4 | A lone forged ad under the key lights "on board"; unknown key shows red | **Fixed.** An ad is this provider's only when it carries the terms `/info` reports; any other under the key is flagged; the light is unknown until the key is known | `state::tests::a_lone_ad_under_the_key_with_other_terms_is_not_this_provider`, `state::tests::on_board_is_unknown_until_the_key_is_known` |
-| F-5 | Missing swap and want fields become zeros | **Open** | |
+| F-5 | Missing swap and want fields become zeros | **Fixed.** A record whose offer lacks an amount is not counted; a missing start or expiry is a dash; an unreadable amount in a log line is shown as written | `wire::tests::record_whose_offer_lacks_an_amount_is_not_counted_as_a_swap_of_zero`, `wire::tests::an_amount_that_cannot_be_read_is_shown_as_written_not_as_zero`; the dashes are not under test |
 | F-6 | One of several boards failing is invisible; duplicates counted twice | **Open.** Only with more than one board configured | |
-| F-7 | Board answers inflate about 50x in memory; the Advisor counts fees on dust | **Open** | |
-| F-8 | The log store can hold hundreds of MiB | **Open.** Bounded; the cap on a kept line should be far below the cap on a read one | |
+| F-7 | Board answers inflate about 50x in memory; the Advisor counts fees on dust | **Fixed.** A board list over 5,000 entries is a failed read, and a bridge smaller than its own fee earns nothing | `http::tests::a_flooded_board_list_is_a_failed_read`, `advisor::tests::a_bridge_smaller_than_its_fee_earns_nothing` |
+| F-8 | The log store can hold hundreds of MiB | **Fixed.** A kept line is cut at 2 KiB, so 5,000 of them hold about 20 MiB at most | `wire::tests::a_long_line_is_kept_short_and_cut_on_a_character` |
 | F-9 | Unbounded channels; swap file check-then-read | **Open.** The file part needs write access to the data directory | |
 | F-10 | "System proxy" wording wrong; a proxy can answer for the local provider | **Fixed in part.** Claim 4 now names the environment variables. Loopback is still sent through a proxy that is set without `NO_PROXY` | `SECURITY.md` |
-| F-11 | Claim 7 rests on ratatui behaviour nothing pins | **Open.** Needs a test that draws control characters and reads the buffer | |
+| F-11 | Claim 7 rests on ratatui behaviour nothing pins | **Fixed.** A test draws escape, bell and other control characters and reads the buffer | `widgets::tests::control_characters_in_drawn_text_never_reach_the_terminal` |
 | F-12 | The TLS stack compiles C | **Accepted.** Claim 3 is about this crate | |
 | F-13 | Repeat counter wrap; `reverse` loose; identity from the log; ETH through `f64` | **Accepted**, display only or unreachable; identity from the log as in the first run's F9 | |
 
@@ -49,7 +49,7 @@ One leg, so every finding was unconfirmed when triaged. Each fix was checked by 
 | F14 | Log lines have no length limit | **Fixed.** 64 KiB, the rest dropped | `local::tests::a_line_with_no_end_is_cut_and_the_next_one_is_still_read` |
 | F15 | Expired wants count as demand | **Fixed** | `state::tests::wants_past_their_time_are_not_counted_as_waiting` |
 | F16 | Unicode format characters reach the terminal | **Accepted.** Visual only | `SECURITY.md` § What this does not cover |
-| F17 | System proxy honoured; `User-Agent`; lights differ by colour only; C build script; start-up `expect` | **Accepted**, except the proxy, now stated in claim 4. The failed light sharing a glyph with the healthy one is **open** | |
+| F17 | System proxy honoured; `User-Agent`; lights differ by colour only; C build script; start-up `expect` | **Accepted**, except the proxy, now stated in claim 4. The failed light sharing a glyph with the healthy one is **fixed**: a failure is a cross | not under test |
 
 Claims after triage: 4, 8 and 9 were reworded to say what the code now does and are held by tests. Claim 2 stands
 again with redirects refused. None of this has been reviewed by a second leg.
