@@ -1,0 +1,5 @@
+GET /info ua=tacmon body=
+GET /health ua=tacmon body=
+GET /wants ua=tacmon body=
+GET /ads ua=tacmon body=
+POST /rpc ua=tacmon body={"id":1,"jsonrpc":"2.0","method":"eth_getBalance","params":["0xATTACKER0000000000000000000000000000beef","latest"]}

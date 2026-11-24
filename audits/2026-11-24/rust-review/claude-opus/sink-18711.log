@@ -1,0 +1,4 @@
+GET /wants ua=tacmon body=
+GET /ads ua=tacmon body=
+GET /wants ua=tacmon body=
+GET /ads ua=tacmon body=

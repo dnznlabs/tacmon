@@ -1,0 +1,6 @@
+splash = false
+[fast_bridge]
+lp_url = "http://127.0.0.1:18731"
+boards = ["http://127.0.0.1:18731"]
+data_dir = "/nonexistent"
+log_cmd = ["true"]

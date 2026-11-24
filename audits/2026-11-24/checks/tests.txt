@@ -1,0 +1,25 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/main.rs (target/debug/deps/tacmon-cfb5fb6e31c7f4c4)
+
+running 18 tests
+test fmt::tests::formats_percent_duration_and_long_hex ... ok
+test monitors::fast_bridge::adapters::wire::tests::line_that_is_not_json_is_shown_as_it_is ... ok
+test monitors::fast_bridge::adapters::wire::tests::capacity_line_carries_its_numbers_as_a_signal ... ok
+test monitors::fast_bridge::adapters::wire::tests::record_without_an_offer_is_not_a_swap ... ok
+test monitors::fast_bridge::adapters::wire::tests::want_without_a_cap_takes_any_fee ... ok
+test monitors::fast_bridge::advisor::tests::a_fee_over_a_cap_loses_that_bridge ... ok
+test monitors::fast_bridge::advisor::tests::blocker_names_the_first_thing_in_the_way ... ok
+test monitors::fast_bridge::adapters::wire::tests::swap_record_reads_both_sides_of_the_offer ... ok
+test monitors::fast_bridge::model::tests::effective_fee_counts_the_flat_part ... ok
+test monitors::fast_bridge::advisor::tests::nothing_in_range_means_no_best_fee ... ok
+test monitors::fast_bridge::model::tests::tac_groups_thousands_and_keeps_two_places ... ok
+test monitors::fast_bridge::feed::tests::every_port_is_read_and_the_pool_account_is_learned_from_the_log ... ok
+test monitors::fast_bridge::advisor::tests::bridges_outside_the_size_range_are_counted_apart ... ok
+test monitors::fast_bridge::model::tests::fee_is_share_plus_flat ... ok
+test monitors::fast_bridge::state::tests::a_failed_read_keeps_the_last_value_and_marks_the_source ... ok
+test monitors::fast_bridge::state::tests::free_prefers_what_the_provider_says_over_the_log ... ok
+test monitors::fast_bridge::state::tests::money_is_summed_from_swaps_by_how_they_ended ... ok
+test monitors::fast_bridge::state::tests::repeated_log_lines_are_counted_not_listed ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
