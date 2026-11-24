@@ -40,6 +40,7 @@ For anyone changing this repo, human or agent.
 | `src/monitors/fast_bridge/state.rs` | what the pages draw, and what each event does to it |
 | `src/monitors/fast_bridge/advisor.rs` | fee and size arithmetic, pure |
 | `src/monitors/fast_bridge/ui.rs` | the header and one function per page |
+| `scripts/backup-swaps.sh` | snapshots a provider's swap records: the one piece of state a provider cannot lose |
 | `SECURITY.md` | the threat model and the numbered claims the reviews attack |
 | `audits/` | the review method, the scope, the prompts and one directory per past review |
 | `deny.toml` | what the dependency tree is held to |
@@ -69,6 +70,7 @@ For anyone changing this repo, human or agent.
 - **A new monitor** is a directory under `src/monitors/` with the same shape, a section in `Config`, and a line in `create_monitors`. Nothing in `src/shell/` changes.
 - **Wire formats stay in `adapters/wire.rs`.** The provider's log messages and record fields are not a stable interface: read them leniently, and show what is not recognised as it is.
 - **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering. A failed status, or an answer missing what it must carry, is a failed read.
+- **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee.
 - **Amounts from outside never wrap or truncate.** Sum with `model::total`, multiply through `model::fee_on`, narrow with `try_from`.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.

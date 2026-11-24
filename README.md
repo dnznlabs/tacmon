@@ -85,6 +85,7 @@ make lint           # Check formatting and run clippy, as the pre-commit hook do
 make run            # Run tacmon against the services on this machine
 make demo           # Run tacmon on made-up data
 make demo-video     # Record docs/demo/ (GIF and MP4) from the demo
+make backup DEST=…  # Snapshot the provider's swap records to another disk (scripts/backup-swaps.sh)
 make audit-checks   # Security checks: advisories, licences, sources, unsafe, clippy, tests
 make audit          # The checks, then adversarial reviews, reconciled into audits/<date>/AUDIT.md
 make help           # List every command

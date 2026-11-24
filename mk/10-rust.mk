@@ -27,3 +27,7 @@ demo-video: build ## Record docs/demo/demo.gif and demo.mp4 from tacmon --demo (
 	python3 scripts/record-demo.py target/release/tacmon docs/demo/demo.cast
 	agg $(AGG_FLAGS) --font-size 14 --theme monokai --fps-cap 30 docs/demo/demo.cast docs/demo/demo.gif
 	ffmpeg -y -loglevel error -i docs/demo/demo.gif -movflags +faststart -pix_fmt yuv420p -vf "fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -crf 20 docs/demo/demo.mp4
+
+.PHONY: backup
+backup: ## Snapshot the provider's swap records: make backup DEST=<dir on another disk>
+	@bash scripts/backup-swaps.sh "$(DEST)"

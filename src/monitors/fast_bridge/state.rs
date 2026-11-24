@@ -245,7 +245,15 @@ impl State {
         self.terms.as_ref().map(|t| advisor::blocker(t, self.free(), w))
     }
     pub fn advice(&self) -> Option<Advice> {
-        self.terms.as_ref().map(|t| advisor::advise(t, &self.wants, &self.fee_ladder_bps))
+        // the others to be measured against: not this provider's own ad, and not one with nothing to lend
+        let mine = self.my_ad();
+        let others: Vec<u64> = self
+            .ads
+            .iter()
+            .filter(|a| !mine.is_some_and(|m| std::ptr::eq(m, *a)) && a.terms.available != Some(0))
+            .map(|a| advisor::all_in(a.terms.fee_bps, a.terms.flat))
+            .collect();
+        self.terms.as_ref().map(|t| advisor::advise(t, &self.wants, &self.fee_ladder_bps, &others))
     }
 }
 
@@ -400,6 +408,25 @@ mod tests {
         st.apply(Event::Ads(None));
 
         assert!(!st.ads_ok);
+    }
+
+    #[test]
+    fn advice_measures_against_other_providers_that_can_lend_and_not_against_itself() {
+        let mut st = state();
+        st.id.claim_pub = "02me".into();
+        let own = Terms { min: 10 * UNIT, max: 500 * UNIT, fee_bps: 150, flat: 0, available: Some(UNIT) };
+        let ad = |key: &str, bps: u64, available: u128| Ad {
+            name: key.into(),
+            claim_pub: key.into(),
+            terms: Terms { fee_bps: bps, available: Some(available), ..own.clone() },
+            any_tac: false,
+            reverse: false,
+        };
+        st.apply(Event::Terms(Some(own.clone())));
+
+        st.apply(Event::Ads(Some(vec![ad("02me", 150, UNIT), ad("03empty", 10, 0), ad("03other", 200, UNIT)])));
+
+        assert_eq!(st.advice().map(|a| a.standing), Some(advisor::Standing::Cheapest { next: 200 }));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Drawing: the header, and one function per page.
 
 use super::{
+    advisor::{HIGH_FEE_BPS, Standing, all_in},
     model::*,
     state::{Page, State},
 };
@@ -328,31 +329,36 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         f.render_widget(Paragraph::new("Waiting for the provider's terms (/info).").block(panel(" Advisor ".into(), th)), area);
         return;
     };
-    let [left, right_pane] = Layout::horizontal([Constraint::Length(58), Constraint::Min(30)]).areas(area);
+    let [left, right_pane] = Layout::horizontal([Constraint::Length(74), Constraint::Min(30)]).areas(area);
     let rows: Vec<Row> = adv
         .ladder
         .iter()
         .map(|r| {
-            let best = Some(r.bps) == adv.best_bps;
-            let mark = match (r.current, best) {
-                (true, true) => "▶ yours · best",
-                (true, false) => "▶ yours",
-                (false, true) => "★ best",
+            // the mark is for the fee that gets chosen, never for the one that earns most: the rows show what each
+            // fee would look like, and a high one is named as what the app would call it
+            let matches = Some(r.bps) == adv.competitive_bps;
+            let mark = match (r.current, matches, r.high) {
+                (true, _, true) => "▶ yours · flagged as a high fee",
+                (true, true, _) => "▶ yours · competitive",
+                (true, false, _) => "▶ yours",
+                (false, _, true) => "flagged as a high fee",
+                (false, true, _) => "★ matches the cheapest",
                 _ => "",
             };
             let row = Row::new(vec![right(pct(r.bps)), right(r.count.to_string()), right(tac(r.volume)), right(tac(r.revenue)), Cell::from(mark)]);
-            match (r.current, best) {
-                (true, _) => row.style(Style::new().fg(th.accent).add_modifier(Modifier::BOLD)),
-                (_, true) => row.style(Style::new().fg(th.good)),
+            match (r.current, matches, r.high) {
+                (true, _, _) => row.style(Style::new().fg(if r.high { th.warn } else { th.accent }).add_modifier(Modifier::BOLD)),
+                (_, _, true) => row.style(th.dim()),
+                (_, true, _) => row.style(Style::new().fg(th.good)),
                 _ => row,
             }
         })
         .collect();
-    let widths = [Constraint::Length(7), Constraint::Length(7), Constraint::Length(12), Constraint::Length(10), Constraint::Fill(1)];
+    let widths = [Constraint::Length(7), Constraint::Length(7), Constraint::Length(12), Constraint::Length(11), Constraint::Fill(1)];
     f.render_widget(
         table(
             if st.board_ok { " Fee against what is waiting now ".into() } else { " Fee against what was waiting · THE BOARD DOES NOT ANSWER ".into() },
-            &["    FEE", "BRIDGES", "      VOLUME", "  YOU EARN", ""],
+            &["    FEE", "BRIDGES", "      VOLUME", " WOULD EARN", ""],
             rows,
             &widths,
             th,
@@ -364,11 +370,28 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let head = |s: &'static str| Line::from(Span::styled(s, Style::new().fg(th.accent).add_modifier(Modifier::BOLD)));
     let faint = |s: &'static str| Line::from(Span::styled(s, th.dim()));
     let mut out = vec![head("Fee")];
-    out.push(match adv.best_bps {
-        Some(b) if b == t.fee_bps => Line::from(format!("  {} earns the most on what is waiting. Keep it.", pct(b))),
-        Some(b) => Line::from(format!("  {} would earn the most on what is waiting (you are at {}).", pct(b), pct(t.fee_bps))),
-        None => Line::from("  Nothing waiting fits your size range, so no fee earns anything now."),
+    let own = all_in(t.fee_bps, t.flat);
+    out.push(Line::from(format!("  You charge {} all in on a 100 TAC bridge ({} + {} flat).", pct(own), pct(t.fee_bps), tac(t.flat))));
+    out.push(match adv.standing {
+        Standing::Alone => Line::from("  No other provider with TAC to lend is on the board to compare with."),
+        Standing::Cheapest { next } => {
+            Line::from(Span::styled(format!("  That is the cheapest on the board (the next is {}). Keep it.", pct(next)), Style::new().fg(th.good)))
+        }
+        Standing::Dearer { cheapest, matching: Some(b) } => {
+            Line::from(Span::styled(format!("  The cheapest other charges {}. A fee of {} would match it.", pct(cheapest), pct(b)), Style::new().fg(th.warn)))
+        }
+        Standing::Dearer { cheapest, matching: None } => {
+            Line::from(Span::styled(format!("  The cheapest other charges {}, under every fee compared here.", pct(cheapest)), Style::new().fg(th.warn)))
+        }
     });
+    out.push(faint("  A bridger is offered the cheaper provider, so being chosen comes before"));
+    out.push(faint("  earning more per bridge. The table shows what each fee would earn."));
+    if own > HIGH_FEE_BPS {
+        out.push(Line::from(Span::styled(
+            format!("  Over {} all in, the app marks a bridge as a high fee. Yours is.", pct(HIGH_FEE_BPS)),
+            Style::new().fg(th.bad),
+        )));
+    }
     out.extend([Line::from(""), head("Size")]);
     if adv.over_count > 0 {
         out.push(Line::from(format!("  {} waiting ({} TAC) are over your max of {}.", adv.over_count, tac(adv.over_volume), tac(t.max))));
