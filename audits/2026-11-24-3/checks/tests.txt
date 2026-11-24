@@ -1,0 +1,56 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/main.rs (target/debug/deps/tacmon-cfb5fb6e31c7f4c4)
+
+running 49 tests
+test fmt::tests::formats_percent_duration_and_long_hex ... ok
+test monitors::fast_bridge::adapters::http::tests::a_body_over_the_limit_is_refused_before_it_is_kept ... ok
+test monitors::fast_bridge::adapters::local::tests::a_line_with_no_end_is_cut_and_the_next_one_is_still_read ... ok
+test monitors::fast_bridge::adapters::local::tests::bytes_that_are_not_utf8_do_not_end_the_feed ... ok
+test monitors::fast_bridge::adapters::wire::tests::a_long_line_is_kept_short_and_cut_on_a_character ... ok
+test monitors::fast_bridge::adapters::wire::tests::ad_without_terms_is_left_out ... ok
+test monitors::fast_bridge::adapters::wire::tests::an_amount_that_cannot_be_read_is_shown_as_written_not_as_zero ... ok
+test monitors::fast_bridge::adapters::wire::tests::answer_without_terms_is_not_read_as_zero_terms ... ok
+test monitors::fast_bridge::adapters::wire::tests::capacity_line_carries_its_numbers_as_a_signal ... ok
+test monitors::fast_bridge::adapters::wire::tests::capacity_line_without_its_amounts_carries_no_signal ... ok
+test monitors::fast_bridge::adapters::wire::tests::fee_cap_that_cannot_be_read_is_the_strictest_cap ... ok
+test monitors::fast_bridge::adapters::wire::tests::line_that_is_not_json_is_shown_as_it_is ... ok
+test monitors::fast_bridge::adapters::wire::tests::numbers_too_large_to_hold_are_not_cut_to_their_low_bits ... ok
+test monitors::fast_bridge::adapters::wire::tests::record_whose_offer_lacks_an_amount_is_not_counted_as_a_swap_of_zero ... ok
+test monitors::fast_bridge::adapters::wire::tests::record_without_an_offer_is_not_a_swap ... ok
+test monitors::fast_bridge::adapters::wire::tests::swap_record_reads_both_sides_of_the_offer ... ok
+test monitors::fast_bridge::adapters::wire::tests::want_without_a_cap_takes_any_fee ... ok
+test monitors::fast_bridge::advisor::tests::a_bridge_smaller_than_its_fee_earns_nothing ... ok
+test monitors::fast_bridge::advisor::tests::a_fee_over_a_cap_loses_that_bridge ... ok
+test monitors::fast_bridge::advisor::tests::blocker_names_the_first_thing_in_the_way ... ok
+test monitors::fast_bridge::advisor::tests::bridges_outside_the_size_range_are_counted_apart ... ok
+test monitors::fast_bridge::advisor::tests::nothing_in_range_means_no_best_fee ... ok
+test monitors::fast_bridge::feed::tests::every_port_is_read_and_the_pool_account_is_learned_from_the_log ... ok
+test monitors::fast_bridge::model::tests::amounts_too_large_to_hold_stop_at_the_top_and_never_wrap ... ok
+test monitors::fast_bridge::model::tests::effective_fee_counts_the_flat_part ... ok
+test monitors::fast_bridge::model::tests::fee_is_share_plus_flat ... ok
+test monitors::fast_bridge::model::tests::tac_groups_thousands_and_keeps_two_places ... ok
+test monitors::fast_bridge::state::tests::a_failed_read_keeps_the_last_value_and_marks_the_source ... ok
+test monitors::fast_bridge::state::tests::a_lone_ad_under_the_key_with_other_terms_is_not_this_provider ... ok
+test monitors::fast_bridge::state::tests::a_second_ad_under_the_same_key_does_not_take_the_name ... ok
+test monitors::fast_bridge::state::tests::a_want_stops_waiting_when_its_time_passes_without_a_new_answer ... ok
+test monitors::fast_bridge::state::tests::ads_that_cannot_be_read_mark_the_board_as_not_answering ... ok
+test monitors::fast_bridge::state::tests::an_alert_is_not_folded_into_a_quieter_line_with_the_same_words ... ok
+test monitors::fast_bridge::state::tests::free_is_not_known_before_anything_has_said ... ok
+test monitors::fast_bridge::state::tests::free_prefers_what_the_provider_says_over_the_log ... ok
+test monitors::fast_bridge::state::tests::free_read_from_the_log_says_so_and_how_old_it_is ... ok
+test monitors::fast_bridge::state::tests::money_is_summed_from_swaps_by_how_they_ended ... ok
+test monitors::fast_bridge::state::tests::on_board_is_unknown_until_the_key_is_known ... ok
+test monitors::fast_bridge::state::tests::repeated_log_lines_are_counted_not_listed ... ok
+test monitors::fast_bridge::state::tests::wants_past_their_time_are_not_counted_as_waiting ... ok
+test monitors::fast_bridge::tests::a_demo_shows_nothing_from_the_operators_config ... ok
+test monitors::fast_bridge::ui::tests::a_group_wider_than_the_terminal_gets_a_line_to_itself ... ok
+test monitors::fast_bridge::ui::tests::a_narrow_header_takes_more_lines_and_never_cuts_a_figure ... ok
+test monitors::fast_bridge::adapters::http::tests::a_failed_status_is_a_failed_read_not_zero_terms ... ok
+test monitors::fast_bridge::adapters::http::tests::health_is_not_read_from_the_body_of_a_redirect ... ok
+test monitors::fast_bridge::adapters::http::tests::health_is_read_from_the_body_of_a_failed_status ... ok
+test shell::widgets::tests::control_characters_in_drawn_text_never_reach_the_terminal ... ok
+test monitors::fast_bridge::adapters::http::tests::a_flooded_board_list_is_a_failed_read ... ok
+test monitors::fast_bridge::adapters::http::tests::a_redirect_is_an_error_and_is_not_followed ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+

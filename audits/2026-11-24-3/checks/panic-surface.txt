@@ -1,0 +1,715 @@
+    Checking tacmon v0.1.0-alpha (.)
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/fmt.rs:26:19
+   |
+26 |     if s.len() <= head + tail + 1 || !s.is_ascii() {
+   |                   ^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+   = note: requested on the command line with `-W clippy::arithmetic-side-effects`
+
+warning: indexing into a string may panic if the index is within a UTF-8 character
+  --> src/fmt.rs:29:23
+   |
+29 |     format!("{}…{}", &s[..head], &s[s.len() - tail..])
+   |                       ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#string_slice
+   = note: requested on the command line with `-W clippy::string-slice`
+
+warning: indexing into a string may panic if the index is within a UTF-8 character
+  --> src/fmt.rs:29:35
+   |
+29 |     format!("{}…{}", &s[..head], &s[s.len() - tail..])
+   |                                   ^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#string_slice
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/fmt.rs:29:37
+   |
+29 |     format!("{}…{}", &s[..head], &s[s.len() - tail..])
+   |                                     ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: used `expect()` on a `Result` value
+  --> src/monitors/fast_bridge/adapters/http.rs:20:5
+   |
+20 |     reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::none()).user_agent("tacmon").build().expect("http client")
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is an `Err`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#expect_used
+   = note: requested on the command line with `-W clippy::expect-used`
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/http.rs:24:8
+   |
+24 |     if body.len() + chunk.len() > MAX_BODY {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: slicing may panic
+  --> src/monitors/fast_bridge/adapters/local.rs:35:33
+   |
+35 |         line.extend_from_slice(&buf[..take.min(room)]);
+   |                                 ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using `.get(..n)`or `.get_mut(..n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+   = note: requested on the command line with `-W clippy::indexing-slicing`
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/local.rs:36:19
+   |
+36 |         r.consume(take + usize::from(ended));
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: used `expect()` on an `Option` value
+  --> src/monitors/fast_bridge/adapters/local.rs:67:46
+   |
+67 |                 let mut out = BufReader::new(child.stdout.take().expect("piped stdout"));
+   |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is `None`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#expect_used
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/memory.rs:75:23
+   |
+75 |     let t = |v: u128| v * UNIT;
+   |                       ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/memory.rs:81:18
+   |
+81 |         created: now - age,
+   |                  ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/memory.rs:82:19
+   |
+82 |         deadline: now - age + 14_400,
+   |                   ^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/memory.rs:83:15
+   |
+83 |         pays: gets * 10_000 / 9_900 + UNIT / 10,
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/memory.rs:97:63
+   |
+97 |             Want { amount: t(3400), max_fee_bps: None, until: now + 30_000 },
+   |                                                               ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/memory.rs:98:68
+   |
+98 |             Want { amount: t(2000), max_fee_bps: Some(200), until: now + 80_000 },
+   |                                                                    ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/memory.rs:99:67
+   |
+99 |             Want { amount: t(1000), max_fee_bps: Some(50), until: now + 52_000 },
+   |                                                                   ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/adapters/memory.rs:100:67
+    |
+100 |             Want { amount: t(620), max_fee_bps: Some(100), until: now + 24_000 },
+    |                                                                   ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/adapters/memory.rs:101:62
+    |
+101 |             Want { amount: t(180), max_fee_bps: None, until: now + 70_000 },
+    |                                                              ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/adapters/memory.rs:102:61
+    |
+102 |             Want { amount: t(60), max_fee_bps: None, until: now + 15_000 },
+    |                                                             ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/wire.rs:91:31
+   |
+91 |     let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+   |                               ^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/wire.rs:91:38
+   |
+91 |     let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+   |                                      ^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/wire.rs:91:58
+   |
+91 |     let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+   |                                                          ^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/wire.rs:92:16
+   |
+92 |     let days = y * 365 + y / 4 - y / 100 + y / 400 + (m * 153 + 2) / 5 + d - 1;
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/adapters/wire.rs:93:10
+   |
+93 |     Some((days.checked_sub(719_468)?) * 86_400 + h * 3600 + mi * 60 + s)
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/adapters/wire.rs:104:13
+    |
+104 |             end -= 1;
+    |             ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/model.rs:13:21
+   |
+13 |         if i > 0 && (whole.len() - i).is_multiple_of(3) {
+   |                     ^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: indexing may panic
+   --> src/monitors/fast_bridge/state.rs:145:22
+    |
+145 |         let s = &mut self.scroll[page as usize];
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/state.rs:146:57
+    |
+146 |         let (older, newer) = (|s: &mut usize, n: usize| *s += n, |s: &mut usize, n: usize| *s = s.saturating_sub(n));
+    |                                                         ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/state.rs:182:13
+    |
+182 |             last.count += 1;
+    |             ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/monitors/fast_bridge/ui.rs:43:27
+   |
+43 |             Some(line) if line.width() + GAP.len() + wide <= usize::from(width) => {
+   |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/ui.rs:144:48
+    |
+144 |         Some(i) => (format!("{}{}", "●".repeat(i + 1), "○".repeat(PHASES.len() - i - 1)), if s.done() { th.good } else { th.accent }),
+    |                                                ^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/ui.rs:144:67
+    |
+144 |         Some(i) => (format!("{}{}", "●".repeat(i + 1), "○".repeat(PHASES.len() - i - 1)), if s.done() { th.good } else { th.accent }),
+    |                                                                   ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: indexing may panic
+   --> src/monitors/fast_bridge/ui.rs:192:26
+    |
+192 |             window(rows, st.scroll[Page::Overview as usize]),
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+   --> src/monitors/fast_bridge/ui.rs:206:26
+    |
+206 |     let back = if full { st.scroll[Page::Activity as usize].min(lines.len().saturating_sub(height)) } else { 0 };
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/ui.rs:207:15
+    |
+207 |     let end = lines.len() - back;
+    |               ^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: slicing may panic
+   --> src/monitors/fast_bridge/ui.rs:208:27
+    |
+208 |     let text: Vec<Line> = lines[end.saturating_sub(height)..end]
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n..m)` or `.get_mut(n..m)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+   --> src/monitors/fast_bridge/ui.rs:266:106
+    |
+266 | ...AX FEE", "EXPIRES IN", "FOR YOU"], window(rows, st.scroll[Page::Demand as usize]), &widths, th), area);
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+   --> src/monitors/fast_bridge/ui.rs:313:26
+    |
+313 |             window(rows, st.scroll[Page::Market as usize]),
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/monitors/fast_bridge/ui.rs:380:93
+    |
+380 | ...   Line::from(Span::styled(format!("  {} more TAC would cover all of it at once.", tac(adv.in_range_volume - free)), Style::new(...
+    |                                                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: indexing may panic
+  --> src/monitors/fast_bridge/mod.rs:70:27
+   |
+70 |         self.state.on_key(Page::ALL[page], key);
+   |                           ^^^^^^^^^^^^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/monitors/fast_bridge/mod.rs:79:27
+   |
+79 |         ui::page(f, area, Page::ALL[page], &self.state, th);
+   |                           ^^^^^^^^^^^^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/monitors/fast_bridge/mod.rs:82:15
+   |
+82 |         match Page::ALL[page] {
+   |               ^^^^^^^^^^^^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:41:27
+   |
+41 |     let len = |w: &[P]| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt();
+   |                           ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:41:36
+   |
+41 |     let len = |w: &[P]| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt();
+   |                                    ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:41:55
+   |
+41 |     let len = |w: &[P]| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt();
+   |                                                       ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:41:64
+   |
+41 |     let len = |w: &[P]| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt();
+   |                                                                ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:49:20
+   |
+49 |         let end = (w[0].0 + (w[1].0 - w[0].0) * part, w[0].1 + (w[1].1 - w[0].1) * part);
+   |                    ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:49:30
+   |
+49 |         let end = (w[0].0 + (w[1].0 - w[0].0) * part, w[0].1 + (w[1].1 - w[0].1) * part);
+   |                              ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:49:39
+   |
+49 |         let end = (w[0].0 + (w[1].0 - w[0].0) * part, w[0].1 + (w[1].1 - w[0].1) * part);
+   |                                       ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:49:55
+   |
+49 |         let end = (w[0].0 + (w[1].0 - w[0].0) * part, w[0].1 + (w[1].1 - w[0].1) * part);
+   |                                                       ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:49:65
+   |
+49 |         let end = (w[0].0 + (w[1].0 - w[0].0) * part, w[0].1 + (w[1].1 - w[0].1) * part);
+   |                                                                 ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:49:74
+   |
+49 |         let end = (w[0].0 + (w[1].0 - w[0].0) * part, w[0].1 + (w[1].1 - w[0].1) * part);
+   |                                                                          ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:50:29
+   |
+50 |         let d = seg_dist(p, w[0], end);
+   |                             ^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/splash.rs:70:33
+   |
+70 |     let step = 32.0 / f32::from(rows * 4);
+   |                                 ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/splash.rs:77:29
+   |
+77 |             let cells = (0..rows * 2).map(|col| {
+   |                             ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/splash.rs:81:45
+   |
+81 |                         let p = ((f32::from(col * 2 + dx) + 0.5) * step, (f32::from(row * 4 + dy) + 0.5) * step);
+   |                                             ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/splash.rs:81:85
+   |
+81 |                         let p = ((f32::from(col * 2 + dx) + 0.5) * step, (f32::from(row * 4 + dy) + 0.5) * step);
+   |                                                                                     ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: indexing may panic
+  --> src/shell/splash.rs:89:42
+   |
+89 | ...                   bits |= 1 << [[0, 3], [1, 4], [2, 5], [6, 7]][dy as usize][dx as usize];
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+  --> src/shell/splash.rs:89:42
+   |
+89 | ...                   bits |= 1 << [[0, 3], [1, 4], [2, 5], [6, 7]][dy as usize][dx as usize];
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/splash.rs:90:39
+   |
+90 | ...                   if on_t { letter += 1 } else { ring += 1 }
+   |                                 ^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/splash.rs:90:60
+   |
+90 | ...                   if on_t { letter += 1 } else { ring += 1 }
+   |                                                      ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/splash.rs:96:36
+   |
+96 |                     char::from_u32(0x2800 + bits).unwrap_or(' ').to_string(),
+   |                                    ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/splash.rs:123:29
+    |
+123 |     let centred = Rect { x: mark_area.x + mark_area.width.saturating_sub(rows * 2) / 2, width: (rows * 2).min(mark_area.width), ..m...
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/splash.rs:123:96
+    |
+123 |     let centred = Rect { x: mark_area.x + mark_area.width.saturating_sub(rows * 2) / 2, width: (rows * 2).min(mark_area.width), ..m...
+    |                                                                                                ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: casting `f32` to `usize` may truncate the value
+   --> src/shell/splash.rs:127:17
+    |
+127 |     let typed = (phase(t, 0.68, 0.86) * WORD.len() as f32) as usize;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#cast_possible_truncation
+    = note: requested on the command line with `-W clippy::cast-possible-truncation`
+
+warning: casting `f32` to `usize` may lose the sign of the value
+   --> src/shell/splash.rs:127:17
+    |
+127 |     let typed = (phase(t, 0.68, 0.86) * WORD.len() as f32) as usize;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#cast_sign_loss
+    = note: requested on the command line with `-W clippy::cast-sign-loss`
+
+warning: indexing into a string may panic if the index is within a UTF-8 character
+   --> src/shell/splash.rs:129:38
+    |
+129 |         Paragraph::new(Span::styled(&WORD[..typed], Style::new().fg(ORANGE).add_modifier(Modifier::BOLD))).centered(),
+    |                                      ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#string_slice
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/splash.rs:130:19
+    |
+130 |         Rect { x: word.x + word.width.saturating_sub(WORD.len() as u16) / 2, width: WORD.len() as u16, ..word }.intersection(word),
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: casting `usize` to `u16` may truncate the value
+   --> src/shell/splash.rs:130:54
+    |
+130 |         Rect { x: word.x + word.width.saturating_sub(WORD.len() as u16) / 2, width: WORD.len() as u16, ..word }.intersection(word),
+    |                                                      ^^^^^^^^^^^^^^^^^
+    |
+    = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#cast_possible_truncation
+help: ... or use `try_from` and handle the error accordingly
+    |
+130 -         Rect { x: word.x + word.width.saturating_sub(WORD.len() as u16) / 2, width: WORD.len() as u16, ..word }.intersection(word),
+130 +         Rect { x: word.x + word.width.saturating_sub(u16::try_from(WORD.len())) / 2, width: WORD.len() as u16, ..word }.intersection(word),
+    |
+
+warning: casting `usize` to `u16` may truncate the value
+   --> src/shell/splash.rs:130:85
+    |
+130 |         Rect { x: word.x + word.width.saturating_sub(WORD.len() as u16) / 2, width: WORD.len() as u16, ..word }.intersection(word),
+    |                                                                                     ^^^^^^^^^^^^^^^^^
+    |
+    = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#cast_possible_truncation
+help: ... or use `try_from` and handle the error accordingly
+    |
+130 -         Rect { x: word.x + word.width.saturating_sub(WORD.len() as u16) / 2, width: WORD.len() as u16, ..word }.intersection(word),
+130 +         Rect { x: word.x + word.width.saturating_sub(WORD.len() as u16) / 2, width: u16::try_from(WORD.len()), ..word }.intersection(word),
+    |
+
+warning: indexing may panic
+  --> src/shell/mod.rs:62:21
+   |
+62 |         let pages = self.monitors[self.at].pages();
+   |                     ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using `.get(n)` or `.get_mut(n)` instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/mod.rs:72:21
+   |
+72 |         let until = tokio::time::Instant::now() + wait;
+   |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+  --> src/shell/mod.rs:99:47
+   |
+99 |             while splash && began.elapsed() < splash::LENGTH + splash::HOLD {
+   |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: indexing may panic
+   --> src/shell/mod.rs:154:21
+    |
+154 |         let pages = self.monitors[self.at].pages().len();
+    |                     ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/mod.rs:158:45
+    |
+158 |             KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < pages => self.page = c as usize - '1' as usize,
+    |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/mod.rs:158:96
+    |
+158 |             KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < pages => self.page = c as usize - '1' as usize,
+    |                                                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/mod.rs:159:79
+    |
+159 |             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => self.page = (self.page + 1) % pages,
+    |                                                                               ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/mod.rs:160:82
+    |
+160 |             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => self.page = (self.page + pages - 1) % pages,
+    |                                                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/mod.rs:162:27
+    |
+162 |                 self.at = (self.at + 1) % self.monitors.len();
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: indexing may panic
+   --> src/shell/mod.rs:165:18
+    |
+165 |             _ => self.monitors[self.at].on_key(self.page, k),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: indexing may panic
+   --> src/shell/mod.rs:170:38
+    |
+170 |         let (th, m) = (&self.theme, &self.monitors[self.at]);
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `.get(n)` or `.get_mut(n)` instead
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#indexing_slicing
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/mod.rs:174:32
+    |
+174 |             Constraint::Length(m.header_height(f.area().width.saturating_sub(2), th) + 2),
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: arithmetic operation that can potentially result in unexpected side-effects
+   --> src/shell/mod.rs:192:82
+    |
+192 |         let titles = m.pages().iter().enumerate().map(|(i, p)| format!("{} {p}", i + 1));
+    |                                                                                  ^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#arithmetic_side_effects
+
+warning: `tacmon` (bin "tacmon") generated 83 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s

@@ -1,0 +1,10 @@
+PASS      lockfile         Cargo.lock is committed and matches Cargo.toml
+PASS      advisories       no RustSec advisory, yanked or unmaintained crate in the tree
+PASS      licences         every dependency's licence is on deny.toml's list
+PASS      bans             no banned crate, no wildcard version
+PASS      sources          every dependency comes from crates.io
+PASS      unsafe           every crate root carries #![forbid(unsafe_code)]
+PASS      clippy           clippy is clean with warnings denied
+PASS      tests            the tests pass
+PASS      scope            every tracked .rs file is in audits/SCOPE or excluded there with a reason
+REPORT    panic-surface    84 lint hits where a panic or a silent wrap could start (panic-surface.txt)

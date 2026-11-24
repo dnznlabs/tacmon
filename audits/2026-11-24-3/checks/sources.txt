@@ -1,0 +1,2 @@
+Info: Running script "cargo-deny" on .
+sources ok
