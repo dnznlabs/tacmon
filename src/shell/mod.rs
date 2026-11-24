@@ -171,7 +171,7 @@ impl Shell {
         let many = self.monitors.len() > 1;
         let [bar, head, tabs, body, foot] = Layout::vertical([
             Constraint::Length(u16::from(many)),
-            Constraint::Length(m.header_height() + 2),
+            Constraint::Length(m.header_height(f.area().width.saturating_sub(2), th) + 2),
             Constraint::Length(1),
             Constraint::Min(0),
             Constraint::Length(1),

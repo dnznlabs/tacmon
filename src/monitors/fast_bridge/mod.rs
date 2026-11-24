@@ -67,8 +67,8 @@ impl Monitor for FastBridge {
     fn on_key(&mut self, page: usize, key: KeyEvent) {
         self.state.on_key(Page::ALL[page], key);
     }
-    fn header_height(&self) -> u16 {
-        ui::HEADER_LINES
+    fn header_height(&self, width: u16, th: &Theme) -> u16 {
+        u16::try_from(ui::header_lines(&self.state, th, width).len()).unwrap_or(u16::MAX)
     }
     fn draw_header(&self, f: &mut Frame, area: Rect, th: &Theme) {
         ui::header(f, area, &self.state, th);

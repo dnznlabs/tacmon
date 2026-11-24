@@ -19,8 +19,6 @@ use ratatui::{
     widgets::{Cell, Paragraph, Row},
 };
 
-pub const HEADER_LINES: u16 = 3;
-
 fn level_color(l: Level, th: &Theme) -> Color {
     match l {
         Level::Info => th.dim,
@@ -33,74 +31,101 @@ fn right(s: String) -> Cell<'static> {
     Cell::from(Line::from(s).right_aligned())
 }
 
-pub fn header(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
+/// Fills lines with groups, starting a new line when the next group would not fit. A group is never split:
+/// a figure cut off at the edge of the terminal reads as a smaller figure.
+fn flow(groups: Vec<Vec<Span<'static>>>, width: u16) -> Vec<Line<'static>> {
+    const GAP: &str = "   ";
+    const DIVIDER: &str = "│  ";
+    let mut lines: Vec<Line> = Vec::new();
+    for group in groups.into_iter().filter(|g| !g.is_empty()) {
+        let wide = Line::from(group.clone()).width();
+        match lines.last_mut() {
+            Some(line) if line.width() + GAP.len() + wide <= usize::from(width) => {
+                line.spans.push(Span::raw(GAP));
+                line.spans.extend(group);
+            }
+            _ => {
+                // a divider separates two groups on one line; at the start of a line it separates nothing
+                let mut group = group;
+                if let Some(first) = group.first_mut()
+                    && let Some(rest) = first.content.strip_prefix(DIVIDER)
+                {
+                    first.content = rest.to_string().into();
+                }
+                lines.push(Line::from(group));
+            }
+        }
+    }
+    lines
+}
+
+/// The header at this width: money, then status, then where the provider is. Each of the three starts its own line
+/// and takes more lines on a narrow terminal.
+pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let label = |s: &'static str| Span::styled(s, th.dim());
+    let dash = || Span::styled("—", th.dim());
     let free = st.free();
-    let money = Line::from(vec![
-        label("free "),
-        // a figure nothing has given yet is a dash, never a zero
-        if st.free_known() {
-            Span::styled(tac(free), bold.fg(if free == 0 || st.free_from_log().is_some() { th.warn } else { th.good }))
-        } else {
-            Span::styled("—", th.dim())
-        },
-        // the provider's own answer is not behind this number: say whose word it is
-        if st.free_known() && st.free_from_log().is_some() { Span::styled(" (from the log)", Style::new().fg(th.warn)) } else { Span::raw("") },
-        label("   promised "),
-        if st.cap_seen { Span::styled(tac(st.cap.promised), bold) } else { Span::styled("—", th.dim()) },
-        label("   held "),
-        if st.cap_seen { Span::styled(tac(st.cap.held), bold) } else { Span::styled("—", th.dim()) },
-        // promised and held are always the log's last word, so they always carry its age
-        Span::styled(
-            match (st.cap_seen, st.cap_age()) {
-                (false, _) => "  (no capacity line in the log yet)".to_string(),
-                (true, Some(age)) => format!("  ({} open, {} holds · log, {} ago)", st.cap.open, st.cap.holds, dur(age)),
-                (true, None) => format!("  ({} open, {} holds · log)", st.cap.open, st.cap.holds),
-            },
-            th.dim(),
-        ),
-        label("  │  on Bitcoin: received "),
-        Span::styled(tac(st.received()), bold),
-        label("   incoming "),
-        Span::styled(tac(st.incoming()), bold),
-        label("  │  fees earned "),
-        Span::styled(tac(st.earned()), bold.fg(th.accent)),
-    ]);
-    let status = Line::from(vec![
-        light(st.healthy, th),
-        label(" health   "),
+    let money = vec![
+        vec![
+            label("free "),
+            // a figure nothing has given yet is a dash, never a zero
+            if st.free_known() { Span::styled(tac(free), bold.fg(if free == 0 || st.free_from_log().is_some() { th.warn } else { th.good })) } else { dash() },
+            // the provider's own answer is not behind this number: say whose word it is
+            if st.free_known() && st.free_from_log().is_some() { Span::styled(" (from the log)", Style::new().fg(th.warn)) } else { Span::raw("") },
+        ],
+        vec![label("promised "), if st.cap_seen { Span::styled(tac(st.cap.promised), bold) } else { dash() }],
+        vec![
+            label("held "),
+            if st.cap_seen { Span::styled(tac(st.cap.held), bold) } else { dash() },
+            // promised and held are always the log's last word, so they always carry its age
+            Span::styled(
+                match (st.cap_seen, st.cap_age()) {
+                    (false, _) => "  (no capacity line in the log yet)".to_string(),
+                    (true, Some(age)) => format!("  ({} open, {} holds · log, {} ago)", st.cap.open, st.cap.holds, dur(age)),
+                    (true, None) => format!("  ({} open, {} holds · log)", st.cap.open, st.cap.holds),
+                },
+                th.dim(),
+            ),
+        ],
+        vec![label("│  on Bitcoin: received "), Span::styled(tac(st.received()), bold)],
+        vec![label("incoming "), Span::styled(tac(st.incoming()), bold)],
+        vec![label("│  fees earned "), Span::styled(tac(st.earned()), bold.fg(th.accent))],
+    ];
+    let status = vec![
+        vec![light(st.healthy, th), label(" health")],
         // unknown, not red, while the board itself is not answering
-        light(st.on_board(), th),
-        label(" on board   "),
-        if st.ad_contested() { Span::styled("an ad that is not yours uses your key   ", Style::new().fg(th.bad)) } else { Span::raw("") },
-        light(Some(st.swaps_ok), th),
-        label(" records   "),
-        match &st.terms {
+        vec![light(st.on_board(), th), label(" on board")],
+        if st.ad_contested() { vec![Span::styled("an ad that is not yours uses your key", Style::new().fg(th.bad))] } else { vec![] },
+        vec![light(Some(st.swaps_ok), th), label(" records")],
+        vec![match &st.terms {
             Some(t) => Span::raw(format!("fee {} + {} · takes {} to {} TAC", pct(t.fee_bps), tac(t.flat), tac(t.min), tac(t.max))),
             None => Span::styled("the provider does not answer /info", Style::new().fg(th.bad)),
-        },
-        if st.id.dry_run { Span::styled("   DRY RUN", Style::new().fg(th.warn)) } else { Span::raw("") },
-    ]);
-    let mut places = vec![
-        label("pool "),
-        Span::raw(short(&st.id.pool_account, 8, 6)),
-        label("   bitcoin "),
-        Span::raw(short(&st.id.bitcoin_address, 10, 6)),
-        label("   claim "),
-        Span::raw(short(&st.id.claim_pub, 8, 6)),
+        }],
+        if st.id.dry_run { vec![Span::styled("DRY RUN", Style::new().fg(th.warn))] } else { vec![] },
     ];
-    if st.shows_eth {
-        places.push(label("   ETH "));
-        places.push(match st.eth {
-            Some(e) => Span::styled(format!("{e:.4}"), bold.fg(if e < 0.002 { th.bad } else { Color::Reset })),
-            None => Span::styled("?", th.dim()),
-        });
-    }
-    if st.healthy == Some(false) && !st.health_error.is_empty() {
-        places.push(Span::styled(format!("   {}", st.health_error), Style::new().fg(th.bad)));
-    }
-    f.render_widget(Paragraph::new(vec![money, status, Line::from(places)]), area);
+    let places = vec![
+        vec![label("pool "), Span::raw(short(&st.id.pool_account, 8, 6))],
+        vec![label("bitcoin "), Span::raw(short(&st.id.bitcoin_address, 10, 6))],
+        vec![label("claim "), Span::raw(short(&st.id.claim_pub, 8, 6))],
+        if st.shows_eth {
+            vec![
+                label("ETH "),
+                match st.eth {
+                    Some(e) => Span::styled(format!("{e:.4}"), bold.fg(if e < 0.002 { th.bad } else { Color::Reset })),
+                    None => Span::styled("?", th.dim()),
+                },
+            ]
+        } else {
+            vec![]
+        },
+        if st.healthy == Some(false) && !st.health_error.is_empty() { vec![Span::styled(st.health_error.clone(), Style::new().fg(th.bad))] } else { vec![] },
+    ];
+    [money, status, places].into_iter().flat_map(|row| flow(row, width)).collect()
+}
+
+pub fn header(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
+    f.render_widget(Paragraph::new(header_lines(st, th, area.width)), area);
 }
 
 pub fn page(f: &mut Frame, area: Rect, page: Page, st: &State, th: &Theme) {
@@ -362,4 +387,37 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         faint("  that found a provider at once never appear here."),
     ]);
     f.render_widget(Paragraph::new(out).block(panel(" Suggestions ".into(), th)), right_pane);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{config::ThemeConfig, monitors::fast_bridge::config::FastBridgeConfig};
+
+    fn text(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
+
+    #[test]
+    fn a_narrow_header_takes_more_lines_and_never_cuts_a_figure() {
+        let (st, th) = (State::new(&FastBridgeConfig::default(), true), Theme::from_config(&ThemeConfig::default()));
+
+        let (wide, narrow) = (header_lines(&st, &th, 200), header_lines(&st, &th, 60));
+
+        assert_eq!(wide.len(), 3);
+        assert!(narrow.len() > 3);
+        assert!(narrow.iter().all(|l| l.width() <= 60), "{:?}", text(&narrow));
+        let figures = |lines: &[Line]| text(lines).concat().replace([' ', '│'], "");
+        assert_eq!(figures(&wide), figures(&narrow));
+        assert!(text(&narrow).iter().all(|l| !l.starts_with('│')));
+    }
+
+    #[test]
+    fn a_group_wider_than_the_terminal_gets_a_line_to_itself() {
+        let groups = vec![vec![Span::raw("ab")], vec![Span::raw("a group far too wide")], vec![Span::raw("cd")]];
+
+        let lines = flow(groups, 8);
+
+        assert_eq!(text(&lines), ["ab", "a group far too wide", "cd"]);
+    }
 }

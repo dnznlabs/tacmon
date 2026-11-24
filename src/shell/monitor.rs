@@ -32,8 +32,8 @@ pub trait Monitor {
     fn refresh(&mut self, now: u64);
     /// A key the shell does not use itself (scrolling, a page's own toggles).
     fn on_key(&mut self, page: usize, key: KeyEvent);
-    /// Lines inside the header frame, which the shell draws.
-    fn header_height(&self) -> u16;
+    /// Lines the header needs inside its frame at this width. The shell draws the frame.
+    fn header_height(&self, width: u16, th: &Theme) -> u16;
     fn draw_header(&self, f: &mut Frame, area: Rect, th: &Theme);
     fn draw_page(&self, f: &mut Frame, area: Rect, page: usize, th: &Theme);
     /// The page's own keys, for the footer.
