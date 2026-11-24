@@ -1,0 +1,153 @@
+Info: Running script "cargo-deny" on .
+warning[duplicate]: found 2 duplicate entries for crate 'syn'
+    ┌─ ./Cargo.lock:153:1
+    │  
+153 │ ╭ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
+154 │ │ syn 3.0.10 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ syn v2.0.119
+      ├── derive_more-impl v2.1.1
+      │   └── derive_more v2.1.1
+      │       └── crossterm v0.29.0
+      │           └── ratatui-crossterm v0.1.2
+      │               └── ratatui v0.30.2
+      │                   └── tacmon v0.1.0-alpha
+      ├── jni-macros v0.22.4
+      │   └── jni v0.22.4
+      │       └── rustls-platform-verifier v0.7.1
+      │           └── reqwest v0.13.5
+      │               └── tacmon v0.1.0-alpha (*)
+      ├── jni-sys-macros v0.4.1
+      │   └── jni-sys v0.4.1
+      │       └── jni v0.22.4 (*)
+      └── strum_macros v0.28.0
+          └── strum v0.28.0
+              ├── ratatui-core v0.1.2
+              │   ├── ratatui v0.30.2 (*)
+              │   ├── ratatui-crossterm v0.1.2 (*)
+              │   ├── ratatui-macros v0.7.2
+              │   │   └── ratatui v0.30.2 (*)
+              │   └── ratatui-widgets v0.3.2
+              │       ├── ratatui v0.30.2 (*)
+              │       └── ratatui-macros v0.7.2 (*)
+              └── ratatui-widgets v0.3.2 (*)
+    ├ syn v3.0.10
+      ├── clap_derive v4.6.9
+      │   └── clap v4.6.9
+      │       └── tacmon v0.1.0-alpha
+      ├── darling_core v0.24.1
+      │   ├── darling v0.24.1
+      │   │   └── instability v0.3.14
+      │   │       ├── ratatui v0.30.2
+      │   │       │   └── tacmon v0.1.0-alpha (*)
+      │   │       ├── ratatui-crossterm v0.1.2
+      │   │       │   └── ratatui v0.30.2 (*)
+      │   │       └── ratatui-widgets v0.3.2
+      │   │           ├── ratatui v0.30.2 (*)
+      │   │           └── ratatui-macros v0.7.2
+      │   │               └── ratatui v0.30.2 (*)
+      │   └── darling_macro v0.24.1
+      │       └── darling v0.24.1 (*)
+      ├── darling_macro v0.24.1 (*)
+      ├── displaydoc v0.2.7
+      │   ├── icu_collections v2.4.0
+      │   │   ├── icu_normalizer v2.4.0
+      │   │   │   └── idna_adapter v1.2.2
+      │   │   │       └── idna v1.1.0
+      │   │   │           └── url v2.5.9
+      │   │   │               ├── reqwest v0.13.5
+      │   │   │               │   └── tacmon v0.1.0-alpha (*)
+      │   │   │               └── tower-http v0.6.11
+      │   │   │                   └── reqwest v0.13.5 (*)
+      │   │   └── icu_properties v2.4.0
+      │   │       └── idna_adapter v1.2.2 (*)
+      │   ├── icu_locale_core v2.4.0
+      │   │   ├── icu_properties v2.4.0 (*)
+      │   │   └── icu_provider v2.4.0
+      │   │       ├── icu_normalizer v2.4.0 (*)
+      │   │       └── icu_properties v2.4.0 (*)
+      │   ├── icu_properties v2.4.0 (*)
+      │   ├── icu_provider v2.4.0 (*)
+      │   ├── tinystr v0.8.5
+      │   │   └── icu_locale_core v2.4.0 (*)
+      │   └── zerotrie v0.2.5
+      │       ├── icu_properties v2.4.0 (*)
+      │       └── icu_provider v2.4.0 (*)
+      ├── instability v0.3.14 (*)
+      ├── serde_derive v1.0.229
+      │   └── serde v1.0.229
+      │       ├── reqwest v0.13.5 (*)
+      │       └── tacmon v0.1.0-alpha (*)
+      ├── synstructure v0.14.0
+      │   ├── yoke-derive v0.8.4
+      │   │   └── yoke v0.8.4
+      │   │       ├── icu_collections v2.4.0 (*)
+      │   │       ├── icu_provider v2.4.0 (*)
+      │   │       ├── zerotrie v0.2.5 (*)
+      │   │       └── zerovec v0.11.9
+      │   │           ├── icu_collections v2.4.0 (*)
+      │   │           ├── icu_locale_core v2.4.0 (*)
+      │   │           ├── icu_normalizer v2.4.0 (*)
+      │   │           ├── icu_properties v2.4.0 (*)
+      │   │           ├── icu_provider v2.4.0 (*)
+      │   │           ├── potential_utf v0.1.6
+      │   │           │   └── icu_collections v2.4.0 (*)
+      │   │           └── tinystr v0.8.5 (*)
+      │   └── zerofrom-derive v0.1.8
+      │       └── zerofrom v0.1.8
+      │           ├── icu_collections v2.4.0 (*)
+      │           ├── icu_provider v2.4.0 (*)
+      │           ├── yoke v0.8.4 (*)
+      │           ├── zerotrie v0.2.5 (*)
+      │           └── zerovec v0.11.9 (*)
+      ├── thiserror-impl v2.0.21
+      │   └── thiserror v2.0.21
+      │       ├── jni v0.22.4
+      │       │   └── rustls-platform-verifier v0.7.1
+      │       │       └── reqwest v0.13.5 (*)
+      │       ├── kasuari v0.4.13
+      │       │   └── ratatui-core v0.1.2
+      │       │       ├── ratatui v0.30.2 (*)
+      │       │       ├── ratatui-crossterm v0.1.2 (*)
+      │       │       ├── ratatui-macros v0.7.2 (*)
+      │       │       └── ratatui-widgets v0.3.2 (*)
+      │       └── ratatui-core v0.1.2 (*)
+      ├── tokio-macros v2.7.2
+      │   └── tokio v1.54.1
+      │       ├── hyper v1.13.0
+      │       │   ├── hyper-rustls v0.27.10
+      │       │   │   └── reqwest v0.13.5 (*)
+      │       │   ├── hyper-util v0.1.21
+      │       │   │   ├── hyper-rustls v0.27.10 (*)
+      │       │   │   └── reqwest v0.13.5 (*)
+      │       │   └── reqwest v0.13.5 (*)
+      │       ├── hyper-rustls v0.27.10 (*)
+      │       ├── hyper-util v0.1.21 (*)
+      │       ├── reqwest v0.13.5 (*)
+      │       ├── tacmon v0.1.0-alpha (*)
+      │       ├── tokio-rustls v0.26.6
+      │       │   ├── hyper-rustls v0.27.10 (*)
+      │       │   └── reqwest v0.13.5 (*)
+      │       ├── tower v0.5.3
+      │       │   ├── reqwest v0.13.5 (*)
+      │       │   └── tower-http v0.6.11 (*)
+      │       └── wasm-bindgen-futures v0.4.80
+      │           └── reqwest v0.13.5 (*)
+      ├── wasm-bindgen-macro-support v0.2.130
+      │   └── wasm-bindgen-macro v0.2.130
+      │       └── wasm-bindgen v0.2.130
+      │           ├── js-sys v0.3.107
+      │           │   ├── reqwest v0.13.5 (*)
+      │           │   ├── wasm-bindgen-futures v0.4.80 (*)
+      │           │   └── web-sys v0.3.107
+      │           │       └── reqwest v0.13.5 (*)
+      │           ├── reqwest v0.13.5 (*)
+      │           ├── wasm-bindgen-futures v0.4.80 (*)
+      │           └── web-sys v0.3.107 (*)
+      ├── yoke-derive v0.8.4 (*)
+      ├── zerofrom-derive v0.1.8 (*)
+      └── zerovec-derive v0.11.7
+          └── zerovec v0.11.9 (*)
+
+bans ok
