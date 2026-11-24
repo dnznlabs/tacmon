@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Snapshots a fast bridge provider's swap records. A swap's record is its safety state: lose the disk and
+# Snapshots a fast bridge provider's swap records, both directions. A swap's record is its safety state: lose the disk and
 # the swaps in flight are lost with it, so the records belong on another disk or another machine.
 #
 #   bash scripts/backup-swaps.sh <destination-dir>
@@ -35,7 +35,10 @@ fi
 
 OUT="$DEST/swaps-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
 # Written beside its final name and moved into place, so a snapshot that exists is a whole one.
-tar -czf "$OUT.partial" -C "$DATA_DIR" swaps
+# The reverse side keeps its swaps apart; a provider with that side off has no such directory.
+PARTS=(swaps)
+[ -d "$DATA_DIR/reverse/swaps" ] && PARTS+=(reverse/swaps)
+tar -czf "$OUT.partial" -C "$DATA_DIR" "${PARTS[@]}"
 # Read back before it counts: an archive that cannot be listed protects nothing.
 tar -tzf "$OUT.partial" > /dev/null || die "the snapshot could not be read back"
 mv "$OUT.partial" "$OUT"

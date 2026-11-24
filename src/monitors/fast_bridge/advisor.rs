@@ -43,7 +43,9 @@ pub struct FeeRow {
 /// the most: a bridger is offered the cheaper provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Standing {
-    /// No other provider with TAC to lend is on the board.
+    /// The board's ads have never been read: there is nothing to compare with, which is not the same as no one.
+    Unknown,
+    /// No other provider that could take the same bridges is on the board.
     Alone,
     /// At or under the cheapest other provider, whose all-in fee this is.
     Cheapest { next: u64 },
@@ -57,6 +59,8 @@ pub struct Advice {
     pub standing: Standing,
     /// The fee to mark on the ladder: the provider's own when it is already the cheapest, or the one that would match.
     pub competitive_bps: Option<u64>,
+    /// Who the cheapest other provider says it is. The board checks no signature: shown so the operator can judge.
+    pub cheapest_name: Option<String>,
     pub in_range_volume: u128,
     pub over_count: usize,
     pub over_volume: u128,
@@ -64,9 +68,16 @@ pub struct Advice {
     pub under_count: usize,
 }
 
+/// Whether another provider's ad is one to be measured against: it must be able to take a bridge this provider
+/// could take, now. An ad for sizes this provider does not serve, or with nothing known to lend, is not a rival.
+pub fn rival(own: &Terms, other: &Terms) -> bool {
+    let (low, high) = (own.min.max(other.min), own.max.min(other.max));
+    low <= high && other.available.is_some_and(|a| a > 0 && a >= low)
+}
+
 /// `ladder` is the fees to compare; the provider's own is always among the rows. `others` is the all-in fee of every
-/// other provider that could take a bridge now.
-pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64], others: &[u64]) -> Advice {
+/// rival, or `None` when the board's ads have never been read.
+pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64], others: Option<&[u64]>) -> Advice {
     let mut fees = ladder.to_vec();
     fees.push(terms.fee_bps);
     fees.sort_unstable();
@@ -93,19 +104,21 @@ pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64], others: &[u64]) -> 
         })
         .collect();
     let over: Vec<&Want> = wants.iter().filter(|w| w.amount > terms.max).collect();
-    let standing = match others.iter().min() {
-        None => Standing::Alone,
-        Some(&cheapest) if all_in(terms.fee_bps, terms.flat) <= cheapest => Standing::Cheapest { next: cheapest },
+    let standing = match others.map(|o| o.iter().min()) {
+        None => Standing::Unknown,
+        Some(None) => Standing::Alone,
+        Some(Some(&cheapest)) if all_in(terms.fee_bps, terms.flat) <= cheapest => Standing::Cheapest { next: cheapest },
         // the ladder is sorted, so the last row at or under the cheapest is the highest fee that still matches it
-        Some(&cheapest) => Standing::Dearer { cheapest, matching: ladder.iter().rfind(|r| all_in(r.bps, terms.flat) <= cheapest).map(|r| r.bps) },
+        Some(Some(&cheapest)) => Standing::Dearer { cheapest, matching: ladder.iter().rfind(|r| all_in(r.bps, terms.flat) <= cheapest).map(|r| r.bps) },
     };
     Advice {
         competitive_bps: match standing {
-            Standing::Alone => None,
+            Standing::Unknown | Standing::Alone => None,
             Standing::Cheapest { .. } => Some(terms.fee_bps),
             Standing::Dearer { matching, .. } => matching,
         },
         standing,
+        cheapest_name: None,
         ladder,
         in_range_volume: total(wants.iter().filter(in_range).map(|w| w.amount)),
         over_count: over.len(),
@@ -151,7 +164,7 @@ mod tests {
         let t = terms();
         let wants = [want(100, Some(100)), want(100, None)];
 
-        let a = advise(&t, &wants, &[50, 300], &[]);
+        let a = advise(&t, &wants, &[50, 300], Some(&[]));
 
         let counts: Vec<(u64, usize)> = a.ladder.iter().map(|r| (r.bps, r.count)).collect();
         assert_eq!(counts, [(50, 2), (150, 1), (300, 1)]);
@@ -163,7 +176,7 @@ mod tests {
         let t = terms();
         let wants = [want(2000, None), want(900, None), want(5, None), want(100, None)];
 
-        let a = advise(&t, &wants, &[], &[]);
+        let a = advise(&t, &wants, &[], Some(&[]));
 
         assert_eq!((a.over_count, a.over_volume, a.largest, a.under_count, a.in_range_volume), (2, 2900 * UNIT, 2000 * UNIT, 1, 100 * UNIT));
     }
@@ -173,7 +186,7 @@ mod tests {
         let t = Terms { min: 0, ..terms() };
         let dust = [Want { amount: 1, max_fee_bps: None, until: 0 }; 3];
 
-        let a = advise(&t, &dust, &[], &[]);
+        let a = advise(&t, &dust, &[], Some(&[]));
 
         assert_eq!((a.ladder[0].count, a.ladder[0].revenue), (0, 0));
     }
@@ -184,7 +197,7 @@ mod tests {
         let t = terms();
         let wants = [want(100, None)];
 
-        let a = advise(&t, &wants, &[30, 80, 300, 500], &[250, 90]);
+        let a = advise(&t, &wants, &[30, 80, 300, 500], Some(&[250, 90]));
 
         assert_eq!(a.standing, Standing::Dearer { cheapest: 90, matching: Some(80) });
         assert_eq!(a.competitive_bps, Some(80));
@@ -194,7 +207,7 @@ mod tests {
     fn a_provider_already_the_cheapest_is_told_to_keep_its_fee_not_to_raise_it() {
         let t = terms();
 
-        let a = advise(&t, &[], &[300, 500], &[400]);
+        let a = advise(&t, &[], &[300, 500], Some(&[400]));
 
         assert_eq!((a.standing, a.competitive_bps), (Standing::Cheapest { next: 400 }, Some(150)));
     }
@@ -203,9 +216,43 @@ mod tests {
     fn with_no_other_provider_no_fee_is_marked() {
         let t = terms();
 
-        let a = advise(&t, &[want(100, None)], &[500], &[]);
+        let a = advise(&t, &[want(100, None)], &[500], Some(&[]));
 
         assert_eq!((a.standing, a.competitive_bps), (Standing::Alone, None));
+    }
+
+    #[test]
+    fn ads_never_read_are_unknown_not_an_empty_board() {
+        let t = terms();
+
+        let a = advise(&t, &[], &[], None);
+
+        assert_eq!((a.standing, a.competitive_bps), (Standing::Unknown, None));
+    }
+
+    #[test]
+    fn an_ad_that_could_not_take_the_same_bridge_is_not_a_rival() {
+        // own: 10 to 500 TAC
+        let own = terms();
+        let other = |min: u128, max: u128, available: Option<u128>| Terms {
+            min: min * UNIT,
+            max: max * UNIT,
+            fee_bps: 0,
+            flat: 0,
+            available: available.map(|a| a * UNIT),
+        };
+
+        let rivals = [
+            other(10, 500, Some(100)),
+            other(600, 900, Some(900)),
+            other(1, 5, Some(5)),
+            other(10, 500, None),
+            other(10, 500, Some(0)),
+            other(50, 500, Some(20)),
+        ]
+        .map(|o| rival(&own, &o));
+
+        assert_eq!(rivals, [true, false, false, false, false, false]);
     }
 
     #[test]
@@ -213,7 +260,7 @@ mod tests {
         // the flat 0.1 TAC counts: 5.00% is 5.10% all in at 100 TAC
         let t = terms();
 
-        let a = advise(&t, &[], &[490, 500], &[]);
+        let a = advise(&t, &[], &[490, 500], Some(&[]));
 
         let high: Vec<(u64, bool)> = a.ladder.iter().map(|r| (r.bps, r.high)).collect();
         assert_eq!(high, [(150, false), (490, false), (500, true)]);

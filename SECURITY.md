@@ -82,6 +82,9 @@ The method, its limits and every past review are in [`audits/`](audits/README.md
   you do not share.
 - **An ad posted under your key.** The board checks no signature. tacmon says when more than one ad uses the
   provider's key and does not take its name from one that carries other terms, but it cannot remove it.
+- **A false ad or a false want.** The board checks no signature on either. The Advisor compares only against
+  ads that could take the same bridges and names the one it compares with, but a careful false ad still moves
+  its advice, and false wants still move the demand it reports. Treat both pages as what the board says.
 - **Text that only looks wrong.** Control characters never reach the terminal, but invisible and
   direction-changing Unicode characters in a name do.
 - Bugs in dependencies that no advisory describes yet.

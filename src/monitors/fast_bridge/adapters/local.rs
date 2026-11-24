@@ -20,7 +20,8 @@ use tokio::{
 const MAX_LINE: usize = 64 << 10;
 /// The most one swap record may hold. The provider's are a few kilobytes.
 const MAX_RECORD: u64 = 1 << 20;
-/// The most records read in one pass. Past this the read fails: a part of the records would be drawn as all of them.
+/// The most records read in one pass, counting records only and not the files the store keeps beside each. Past
+/// this the read fails: a part of the records would be drawn as all of them.
 const MAX_RECORDS: usize = 20_000;
 /// How long one record may take to open and read. A pipe put where a record was never opens.
 const RECORD_WAIT: Duration = Duration::from_secs(2);
@@ -131,14 +132,14 @@ impl SwapStore for FileSwaps {
             let mut out = Vec::new();
             let mut seen = 0usize;
             while let Some(e) = rd.next_entry().await? {
-                seen += 1;
-                if seen > MAX_RECORDS {
-                    bail!("more than {MAX_RECORDS} entries in the swap records");
-                }
                 let p = e.path();
                 // the store keeps .bak and .tmp files beside each record
                 if p.extension().is_none_or(|x| x != "json") {
                     continue;
+                }
+                seen += 1;
+                if seen > MAX_RECORDS {
+                    bail!("more than {MAX_RECORDS} swap records");
                 }
                 // a record caught mid-write is skipped and read whole on the next pass
                 let bytes = tokio::time::timeout(RECORD_WAIT, record(&p)).await.ok().flatten();
@@ -174,6 +175,8 @@ mod tests {
         std::fs::write(swaps.join("good.json"), good).expect("a record");
         std::fs::write(dir.join("elsewhere.json"), good).expect("a file outside");
         std::os::unix::fs::symlink(dir.join("elsewhere.json"), swaps.join("link.json")).expect("a link");
+        // the files beside a record are not records: they must not count toward the limit or be read
+        std::fs::write(swaps.join("good.json.bak"), good).expect("a backup beside the record");
         std::fs::write(swaps.join("huge.json"), vec![b' '; usize::try_from(MAX_RECORD).expect("fits") + 1]).expect("a large file");
 
         let read = create_file_swaps(&dir).swaps().await.expect("a read");

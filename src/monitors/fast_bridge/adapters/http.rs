@@ -5,7 +5,7 @@ use crate::monitors::fast_bridge::{
     model::{Ad, Health, Terms, Want},
     ports::{Board, Fut, GasBalance, Provider},
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -95,16 +95,23 @@ pub fn create_http_board(http: reqwest::Client, boards: &[String]) -> HttpBoard 
 }
 
 impl HttpBoard {
-    /// Every board is read and the lists are joined. One that fails leaves the others' answers standing; all failing is an error.
+    /// Every board is read and the lists are joined. One board failing fails the read: the lists of the rest would be
+    /// drawn as the whole market, with nothing to say a part is missing.
     async fn list(&self, path: &str) -> Result<Vec<Value>> {
-        let mut out = None::<Vec<Value>>;
-        for b in &self.boards {
-            let Ok(mut v) = get(&self.http, &format!("{b}/{path}")).await else { continue };
-            // a flooded list is not read at all: part of it would be drawn as the whole market
-            let Some(Value::Array(items)) = v.get_mut(path).map(Value::take).filter(|l| l.as_array().is_some_and(|l| l.len() <= MAX_ITEMS)) else { continue };
-            out.get_or_insert_with(Vec::new).extend(items);
+        if self.boards.is_empty() {
+            bail!("no board is configured");
         }
-        out.ok_or_else(|| anyhow!("no board answered /{path}"))
+        let mut out = Vec::new();
+        for b in &self.boards {
+            let mut v = get(&self.http, &format!("{b}/{path}")).await.with_context(|| format!("{b}/{path}"))?;
+            let Some(Value::Array(items)) = v.get_mut(path).map(Value::take) else { bail!("{b}/{path} answered without a list") };
+            // a flooded list is not read at all, for the same reason
+            if items.len() > MAX_ITEMS {
+                bail!("{b}/{path} lists more than {MAX_ITEMS}");
+            }
+            out.extend(items);
+        }
+        Ok(out)
     }
 }
 
@@ -206,6 +213,16 @@ mod tests {
         let health = create_http_provider(create_http_client(), &base).health().await;
 
         assert!(health.is_err());
+    }
+
+    #[tokio::test]
+    async fn one_board_of_two_failing_is_a_failed_read_not_a_smaller_market() {
+        let answering = serve_once("200 OK".into(), r#"{"wants":[{"amount":"5"}]}"#).await;
+        let failing = serve_once("500 Internal Server Error".into(), "{}").await;
+
+        let wants = create_http_board(create_http_client(), &[answering, failing]).wants().await;
+
+        assert!(wants.is_err());
     }
 
     #[tokio::test]

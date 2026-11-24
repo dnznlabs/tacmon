@@ -4,6 +4,29 @@ What was done about every finding of every run, newest run first. A run's `AUDIT
 where its findings are answered. **Fixed** names the test that fails without the fix. **Accepted** gives the
 reason and where the limit is written down. **Open** is still to do.
 
+## 2026-11-24-4
+
+Two legs on `09fb20e`, clean tree: 17 findings after merging, none high. Two of the three mediums were in the
+Advisor, rewritten just before the run. Numbers are the rollup's.
+
+| # | Finding | Found by | Outcome | Held by |
+|---|---|---|---|---|
+| 1 | The Advisor compares against stale or never-read ads with no marker | both | **Fixed.** Ads never read is "unknown", not an empty board; ads that can no longer be read are named as last known, in the pane and the table's title | `advisor::tests::ads_never_read_are_unknown_not_an_empty_board`, `state::tests::advice_measures_against_other_providers_that_can_lend_and_not_against_itself`; the stale line is not under test |
+| 2 | A partial multi-board answer is reported as a complete one | codex | **Fixed.** One board failing fails the read. Entries mirrored on two boards are still counted twice | `http::tests::one_board_of_two_failing_is_a_failed_read_not_a_smaller_market` |
+| 3 | The Advisor matches any unsigned ad, however implausible | claude | **Fixed in part.** A rival must be able to take a bridge this provider could take, with TAC known to lend, and is named so the operator can judge. A careful false ad still passes: the board signs nothing | `advisor::tests::an_ad_that_could_not_take_the_same_bridge_is_not_a_rival`; limit in `SECURITY.md` |
+| 4 | Check-then-open race in swap record reading | both | **Open.** Bounded since the last run; closing it needs `O_NOFOLLOW`, which is a platform flag | |
+| 5 | The repeated-line counter overflows | both | **Accepted**, as before | |
+| 6 | Swap reads fail past about 6,700 swaps; stale totals still bold | claude | **Fixed.** Only records count toward the limit, and totals from a read that now fails are marked as last known | `local::tests::only_ordinary_files_of_a_records_size_are_read` has a file beside the record; the mark is not under test |
+| 7 | An unparsable swap record vanishes silently | claude | **Open** | |
+| 8 | The Suggestions pane cuts figures at its right edge | claude | **Fixed.** The pane wraps | not under test |
+| 9 | Overlapping boards make the provider's own ad look forged | claude | **Open.** Only with more than one board configured | |
+| 10 | A proxy also carries the loopback provider URL | claude | **Open** | |
+| 11 | Per-record strings are not bounded | claude | **Open.** Bounded by the 1 MiB record limit | |
+| 12 to 17 | ETH in floating point; a future log timestamp; C in the build and a stale licence exception; a newline in a cell; what leaves the machine is not pinned; the demo on a wrong clock | claude | **Accepted** or **open**, all info | |
+
+Claim 9 was broken by both legs again, through findings 1, 2 and 6, now fixed. Claims 1 and 8 are disputed over
+finding 4. Not re-reviewed: these fixes have been checked by their tests only.
+
 ## 2026-11-24-3
 
 The first run with two legs, on `35168f3`, clean tree. Codex reported 6 findings and Claude 13; 17 after merging.

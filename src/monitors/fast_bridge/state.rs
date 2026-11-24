@@ -60,6 +60,8 @@ pub struct State {
     /// Whether the board's last answer for wants, and for ads, was read.
     pub board_ok: bool,
     pub ads_ok: bool,
+    /// Whether the board's ads have ever been read: until they have, an empty list is not an empty market.
+    pub ads_seen: bool,
 
     pub deadline_warn_secs: u64,
     fee_ladder_bps: Vec<u64>,
@@ -89,6 +91,7 @@ impl State {
             ads: Vec::new(),
             board_ok: false,
             ads_ok: false,
+            ads_seen: false,
             deadline_warn_secs: cfg.advisor.deadline_warn_secs,
             fee_ladder_bps: cfg.advisor.fee_ladder_bps.clone(),
             pool_account_fixed: !cfg.pool_account.is_empty(),
@@ -122,6 +125,7 @@ impl State {
             }
             Event::Ads(a) => {
                 self.ads_ok = a.is_some();
+                self.ads_seen |= a.is_some();
                 if let Some(mut a) = a {
                     a.sort_by_key(|a| effective_bps(100 * UNIT, a.terms.fee_bps, a.terms.flat));
                     self.ads = a;
@@ -245,15 +249,19 @@ impl State {
         self.terms.as_ref().map(|t| advisor::blocker(t, self.free(), w))
     }
     pub fn advice(&self) -> Option<Advice> {
-        // the others to be measured against: not this provider's own ad, and not one with nothing to lend
+        let own = self.terms.as_ref()?;
+        // the others to be measured against: not this provider's own ad, and only one that could take the same bridge
         let mine = self.my_ad();
-        let others: Vec<u64> = self
+        let rivals: Vec<(u64, &Ad)> = self
             .ads
             .iter()
-            .filter(|a| !mine.is_some_and(|m| std::ptr::eq(m, *a)) && a.terms.available != Some(0))
-            .map(|a| advisor::all_in(a.terms.fee_bps, a.terms.flat))
+            .filter(|a| !mine.is_some_and(|m| std::ptr::eq(m, *a)) && advisor::rival(own, &a.terms))
+            .map(|a| (advisor::all_in(a.terms.fee_bps, a.terms.flat), a))
             .collect();
-        self.terms.as_ref().map(|t| advisor::advise(t, &self.wants, &self.fee_ladder_bps, &others))
+        let fees: Vec<u64> = rivals.iter().map(|(fee, _)| *fee).collect();
+        let mut advice = advisor::advise(own, &self.wants, &self.fee_ladder_bps, self.ads_seen.then_some(fees.as_slice()));
+        advice.cheapest_name = rivals.iter().min_by_key(|(fee, _)| *fee).map(|(_, a)| a.name.clone());
+        Some(advice)
     }
 }
 
@@ -424,9 +432,13 @@ mod tests {
         };
         st.apply(Event::Terms(Some(own.clone())));
 
-        st.apply(Event::Ads(Some(vec![ad("02me", 150, UNIT), ad("03empty", 10, 0), ad("03other", 200, UNIT)])));
+        let before_any_ads = st.advice().map(|a| a.standing);
 
-        assert_eq!(st.advice().map(|a| a.standing), Some(advisor::Standing::Cheapest { next: 200 }));
+        st.apply(Event::Ads(Some(vec![ad("02me", 150, 10 * UNIT), ad("03empty", 10, 0), ad("03other", 200, 10 * UNIT)])));
+
+        let a = st.advice().expect("advice");
+        assert_eq!(before_any_ads, Some(advisor::Standing::Unknown));
+        assert_eq!((a.standing, a.cheapest_name.as_deref()), (advisor::Standing::Cheapest { next: 200 }, Some("03other")));
     }
 
     #[test]

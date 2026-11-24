@@ -17,7 +17,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Cell, Paragraph, Row},
+    widgets::{Cell, Paragraph, Row, Wrap},
 };
 
 fn level_color(l: Level, th: &Theme) -> Color {
@@ -96,6 +96,8 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
         vec![label("│  on Bitcoin: received "), if st.swaps_known() { Span::styled(tac(st.received()), bold) } else { dash() }],
         vec![label("incoming "), if st.swaps_known() { Span::styled(tac(st.incoming()), bold) } else { dash() }],
         vec![label("│  fees earned "), if st.swaps_known() { Span::styled(tac(st.earned()), bold.fg(th.accent)) } else { dash() }],
+        // the records could be read once and cannot be now: the three figures before this are the last read
+        if st.swaps_known() && !st.swaps_ok { vec![Span::styled("(records not read: last known)", Style::new().fg(th.bad))] } else { vec![] },
     ];
     let status = vec![
         vec![light(st.healthy, th), label(" health")],
@@ -357,7 +359,11 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let widths = [Constraint::Length(7), Constraint::Length(7), Constraint::Length(12), Constraint::Length(11), Constraint::Fill(1)];
     f.render_widget(
         table(
-            if st.board_ok { " Fee against what is waiting now ".into() } else { " Fee against what was waiting · THE BOARD DOES NOT ANSWER ".into() },
+            if st.board_ok && st.ads_ok {
+                " Fee against what is waiting now ".into()
+            } else {
+                " Fee against what was waiting · THE BOARD DOES NOT ANSWER ".into()
+            },
             &["    FEE", "BRIDGES", "      VOLUME", " WOULD EARN", ""],
             rows,
             &widths,
@@ -372,18 +378,28 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let mut out = vec![head("Fee")];
     let own = all_in(t.fee_bps, t.flat);
     out.push(Line::from(format!("  You charge {} all in on a 100 TAC bridge ({} + {} flat).", pct(own), pct(t.fee_bps), tac(t.flat))));
+    // whose word the comparison rests on: the board signs nothing, so the name is there for the operator to judge
+    let who = adv.cheapest_name.as_deref().filter(|n| !n.is_empty()).map(|n| format!(" ({})", n.chars().take(24).collect::<String>())).unwrap_or_default();
     out.push(match adv.standing {
-        Standing::Alone => Line::from("  No other provider with TAC to lend is on the board to compare with."),
+        Standing::Unknown => {
+            Line::from(Span::styled("  The board's ads have not been read yet, so there is nothing to compare with.", Style::new().fg(th.warn)))
+        }
+        Standing::Alone => Line::from("  No other provider that could take the same bridges is on the board."),
         Standing::Cheapest { next } => {
-            Line::from(Span::styled(format!("  That is the cheapest on the board (the next is {}). Keep it.", pct(next)), Style::new().fg(th.good)))
+            Line::from(Span::styled(format!("  That is the cheapest on the board (the next{who} is {}). Keep it.", pct(next)), Style::new().fg(th.good)))
         }
-        Standing::Dearer { cheapest, matching: Some(b) } => {
-            Line::from(Span::styled(format!("  The cheapest other charges {}. A fee of {} would match it.", pct(cheapest), pct(b)), Style::new().fg(th.warn)))
-        }
+        Standing::Dearer { cheapest, matching: Some(b) } => Line::from(Span::styled(
+            format!("  The cheapest other{who} charges {}. A fee of {} would match it.", pct(cheapest), pct(b)),
+            Style::new().fg(th.warn),
+        )),
         Standing::Dearer { cheapest, matching: None } => {
-            Line::from(Span::styled(format!("  The cheapest other charges {}, under every fee compared here.", pct(cheapest)), Style::new().fg(th.warn)))
+            Line::from(Span::styled(format!("  The cheapest other{who} charges {}, under every fee compared here.", pct(cheapest)), Style::new().fg(th.warn)))
         }
     });
+    if st.ads_seen && !st.ads_ok {
+        out.push(Line::from(Span::styled("  The board's ads could not be read: this is against the last known ones.", Style::new().fg(th.bad))));
+    }
+    out.push(faint("  Ads are unsigned: anyone can post one. Check a rival is real on the Market page."));
     out.push(faint("  A bridger is offered the cheaper provider, so being chosen comes before"));
     out.push(faint("  earning more per bridge. The table shows what each fee would earn."));
     if own > HIGH_FEE_BPS {
@@ -423,7 +439,8 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         faint("  posted. This is a snapshot of that demand, not a forecast: bridges"),
         faint("  that found a provider at once never appear here."),
     ]);
-    f.render_widget(Paragraph::new(out).block(panel(" Suggestions ".into(), th)), right_pane);
+    // wrapped, never cut: a figure that runs off the edge of the pane reads as a smaller one
+    f.render_widget(Paragraph::new(out).wrap(Wrap { trim: false }).block(panel(" Suggestions ".into(), th)), right_pane);
 }
 
 #[cfg(test)]
