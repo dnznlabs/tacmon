@@ -2,10 +2,10 @@
 
 use crate::monitors::fast_bridge::{
     model::{Ad, Capacity, Health, Identity, Level, LogEntry, Signal, Swap, Terms, UNIT, Want},
-    ports::{Board, Fut, GasBalance, LogFeed, Ports, Provider, SwapStore},
+    ports::{Board, Fut, GasBalance, LogFeed, Ports, Provider, QUEUE, SwapStore},
 };
 use std::sync::Arc;
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::sync::mpsc::{Receiver, channel};
 
 #[derive(Debug, Clone, Default)]
 pub struct Memory {
@@ -51,11 +51,11 @@ impl GasBalance for Memory {
 pub struct MemoryLog(pub Vec<LogEntry>);
 
 impl LogFeed for MemoryLog {
-    fn start(self: Box<Self>) -> UnboundedReceiver<LogEntry> {
-        let (tx, rx) = unbounded_channel();
+    fn start(self: Box<Self>) -> Receiver<LogEntry> {
+        let (tx, rx) = channel(QUEUE);
         tokio::spawn(async move {
             for e in self.0 {
-                if tx.send(e).is_err() {
+                if tx.send(e).await.is_err() {
                     return;
                 }
             }

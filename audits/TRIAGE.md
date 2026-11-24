@@ -4,6 +4,34 @@ What was done about every finding of every run, newest run first. A run's `AUDIT
 where its findings are answered. **Fixed** names the test that fails without the fix. **Accepted** gives the
 reason and where the limit is written down. **Open** is still to do.
 
+## 2026-11-24-3
+
+The first run with two legs, on `35168f3`, clean tree. Codex reported 6 findings and Claude 13; 17 after merging.
+Numbers are the rollup's.
+
+| # | Finding | Found by | Outcome | Held by |
+|---|---|---|---|---|
+| 1 | A failed `/health` status can be drawn as healthy | codex | **Fixed.** A failed status is never healthy, whatever its body says | `http::tests::a_failed_status_is_never_healthy_whatever_its_body_says` |
+| 2 | Free TAC nothing has reported is used as 0.00 | claude | **Fixed.** Free is unknown until something says; an unknown blocks no bridge and the Advisor says it cannot judge cover | `advisor::tests::free_tac_that_is_not_known_blocks_nothing`, `state::tests::free_is_not_known_before_anything_has_said` |
+| 3 | The swap-record size check races the read, and follows links | both | **Fixed.** The size is checked on the open file, the read stops at the limit, a link is not read, and one record may take two seconds at most. A pipe swapped in after the link check still costs a blocked thread until that wait ends | `local::tests::only_ordinary_files_of_a_records_size_are_read`; the race itself is not under test |
+| 4 | A 4 MiB board answer parses to 0.4 to 0.8 GB | claude | **Fixed in part.** An answer is refused over 256 KiB, and a list is moved, not copied. By the leg's own ratio that is about 50 MiB at worst; not measured again | `http::tests::a_body_over_the_limit_is_refused_before_it_is_kept` |
+| 5 | Unbounded log and wake queues | codex | **Fixed.** Readers wait on queues of 1,024, and one wake waits at a time | `feed::tests::every_port_is_read_and_the_pool_account_is_learned_from_the_log` runs on them; the bound is not under test |
+| 6 | The number of swap records read is unbounded | codex | **Fixed.** Over 20,000 entries the read fails, and the records light says so | not under test |
+| 7 | A capacity figure from the log can carry no age, or a wrong one | both in part | **Open.** A line with a time in the future reads as fresh | |
+| 8 | Swap totals show 0.00 before the records are read | claude | **Fixed.** A dash until they have been | not under test |
+| 9 | Market marks a forged ad under the key as "yours" | claude | **Fixed.** Only the ad the provider's own terms pick out is marked | not under test |
+| 10 | The repeated-line count can overflow | codex | **Accepted.** Needs four billion identical lines in a row | |
+| 11 | Unsigned demand steers the Advisor; over 5,000 wants blinds Demand | claude | **Accepted.** The board signs nothing; the Advisor page says it is a snapshot of posted demand | `SECURITY.md` |
+| 12 | One of several boards failing is silent; mirrored entries count twice | claude | **Open.** Only with more than one board configured | |
+| 13 | The HTTP client is built with `expect` | claude | **Accepted.** Fails at start, before anything is drawn | |
+| 14 | A proxy also carries requests to the local provider; claim 4 names too few variables | claude | **Open** | |
+| 15 | `--wait` with a huge value panics | claude | **Fixed.** Capped at an hour | not under test |
+| 16 | The TLS path compiles C | claude | **Accepted**, as before | |
+| 17 | Smaller ways the screen can mislead | claude | **Open** | |
+
+Disputed between the legs: claim 1, over a link in the records directory being read (links are no longer read);
+and claim 8's verdict. Not re-reviewed: these fixes have been checked by their tests only.
+
 ## 2026-11-24-2
 
 A re-run on the fixed code (`85014a2`), one leg. It found no high finding and broke claims 4 and 9 again, two of

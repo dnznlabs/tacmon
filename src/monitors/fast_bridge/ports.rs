@@ -4,7 +4,11 @@
 use super::model::{Ad, Health, LogEntry, Swap, Terms, Want};
 use anyhow::Result;
 use std::{future::Future, pin::Pin, sync::Arc};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
+
+/// How many entries or events may wait between a reader and the screen. A reader that fills it waits: memory does
+/// not grow with how fast a source produces.
+pub const QUEUE: usize = 1024;
 
 /// Boxed so the ports stay object-safe: the adapter behind one is chosen at run time.
 pub type Fut<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -34,7 +38,7 @@ pub trait GasBalance: Send + Sync {
 /// The provider's log, oldest first, then live. The stream ends when the adapter can give no more.
 pub trait LogFeed: Send {
     /// Called once, inside the runtime.
-    fn start(self: Box<Self>) -> UnboundedReceiver<LogEntry>;
+    fn start(self: Box<Self>) -> Receiver<LogEntry>;
 }
 
 pub struct Ports {

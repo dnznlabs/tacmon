@@ -3,19 +3,30 @@
 
 use super::{Msg, theme::Theme};
 use ratatui::{Frame, crossterm::event::KeyEvent, layout::Rect};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// How a monitor's readers tell the shell there is something new to draw.
 #[derive(Clone)]
-pub struct Wake(UnboundedSender<Msg>);
+pub struct Wake {
+    tx: UnboundedSender<Msg>,
+    /// Set while a wake is waiting to be acted on, and cleared by the shell when it takes in what is new.
+    pending: Arc<AtomicBool>,
+}
 
 impl Wake {
-    pub fn new(tx: UnboundedSender<Msg>) -> Self {
-        Self(tx)
+    pub fn new(tx: UnboundedSender<Msg>, pending: Arc<AtomicBool>) -> Self {
+        Self { tx, pending }
     }
+    /// At most one wake waits at a time, however fast a reader produces: the queue cannot grow with the log.
     pub fn wake(&self) {
-        // the shell has gone: nothing is left to draw for
-        let _ = self.0.send(Msg::Wake);
+        if !self.pending.swap(true, Ordering::AcqRel) {
+            // an error means the shell has gone: nothing is left to draw for
+            let _ = self.tx.send(Msg::Wake);
+        }
     }
 }
 

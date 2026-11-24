@@ -18,6 +18,10 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Tabs},
 };
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 use theme::Theme;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -38,6 +42,8 @@ pub struct Shell {
     quit: bool,
     tx: UnboundedSender<Msg>,
     rx: UnboundedReceiver<Msg>,
+    /// Shared with every monitor's `Wake`: see there.
+    pending: Arc<AtomicBool>,
 }
 
 impl Shell {
@@ -47,10 +53,11 @@ impl Shell {
             return Err(anyhow!("no monitor is enabled in the configuration"));
         }
         let (tx, rx) = unbounded_channel();
+        let pending = Arc::new(AtomicBool::new(false));
         for m in &mut monitors {
-            m.start(Wake::new(tx.clone()));
+            m.start(Wake::new(tx.clone(), pending.clone()));
         }
-        Ok(Self { monitors, theme, at: 0, page: 0, quit: false, tx, rx })
+        Ok(Self { monitors, theme, at: 0, page: 0, quit: false, tx, rx, pending })
     }
 
     /// `page` or `monitor/page`, by name, as `--snapshot` takes it.
@@ -69,8 +76,12 @@ impl Shell {
 
     /// Gathers for `wait`, then draws the current page once and returns it as plain text.
     pub async fn snapshot(&mut self, wait: Duration, width: u16, height: u16) -> Result<String> {
-        let until = tokio::time::Instant::now() + wait;
-        while let Ok(Some(_)) = tokio::time::timeout_at(until, self.rx.recv()).await {}
+        // capped: an instant an absurd wait away cannot be represented
+        let until = tokio::time::Instant::now() + wait.min(Duration::from_secs(3600));
+        // taken in as it arrives: the readers' queues are bounded, and they wait while nothing drains them
+        while let Ok(Some(_)) = tokio::time::timeout_at(until, self.rx.recv()).await {
+            self.refresh();
+        }
         self.refresh();
         let mut term = Terminal::new(TestBackend::new(width, height))?;
         term.draw(|f| self.draw(f))?;
@@ -97,6 +108,7 @@ impl Shell {
             // the monitors are already reading, so the start screen costs no time the first page would not
             let began = tokio::time::Instant::now();
             while splash && began.elapsed() < splash::LENGTH + splash::HOLD {
+                self.refresh();
                 term.draw(|f| splash::draw(f, (began.elapsed().as_secs_f32() / splash::LENGTH.as_secs_f32()).min(1.0), &self.theme))?;
                 // any key ends it; the key itself is not acted on, so a stray "q" does not quit before anything is seen
                 if let Ok(Some(Msg::Key(_))) = tokio::time::timeout(splash::FRAME, self.rx.recv()).await {
@@ -138,6 +150,8 @@ impl Shell {
     }
 
     fn refresh(&mut self) {
+        // before the monitors are read: anything sent after this asks for another draw
+        self.pending.store(false, Ordering::Release);
         let now = now();
         for m in &mut self.monitors {
             m.refresh(now);

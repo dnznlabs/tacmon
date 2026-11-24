@@ -4,13 +4,13 @@
 use super::{
     config::Refresh,
     model::{Ad, Health, LogEntry, Signal, Swap, Terms, Want},
-    ports::Ports,
+    ports::{Ports, QUEUE},
 };
 use crate::shell::monitor::Wake;
 use std::time::Duration;
 use tokio::{
     sync::{
-        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+        mpsc::{Receiver, Sender, channel},
         watch,
     },
     time::sleep,
@@ -29,22 +29,24 @@ pub enum Event {
 
 #[derive(Clone)]
 struct Out {
-    tx: UnboundedSender<Event>,
+    tx: Sender<Event>,
     wake: Wake,
 }
 
 impl Out {
-    /// `false` once the monitor has gone, which ends the task that asked.
-    fn send(&self, ev: Event) -> bool {
-        let ok = self.tx.send(ev).is_ok();
+    /// `false` once the monitor has gone, which ends the task that asked. Waits while the queue is full.
+    async fn send(&self, ev: Event) -> bool {
+        // woken first as well: a reader waiting on a full queue needs the shell to come and empty it
+        self.wake.wake();
+        let ok = self.tx.send(ev).await.is_ok();
         self.wake.wake();
         ok
     }
 }
 
 /// `pool_account` empty means: learn it from the log's start line. Must be called inside the runtime.
-pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) -> UnboundedReceiver<Event> {
-    let (tx, rx) = unbounded_channel();
+pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) -> Receiver<Event> {
+    let (tx, rx) = channel(QUEUE);
     let out = Out { tx, wake };
     let Ports { provider, board, swaps, gas, log } = ports;
     let learn = pool_account.is_empty();
@@ -57,7 +59,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
             if learn && let Some(Signal::Started(id)) = &entry.signal {
                 let _ = pool_tx.send(id.pool_account.clone());
             }
-            if !o.send(Event::Log(entry)) {
+            if !o.send(Event::Log(entry)).await {
                 return;
             }
         }
@@ -70,7 +72,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
     tokio::spawn(async move {
         loop {
             let (terms, health) = tokio::join!(provider.terms(), provider.health());
-            if !o.send(Event::Terms(terms.ok())) || !o.send(Event::Health(health.ok())) {
+            if !o.send(Event::Terms(terms.ok())).await || !o.send(Event::Health(health.ok())).await {
                 return;
             }
             sleep(every).await;
@@ -82,7 +84,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
     tokio::spawn(async move {
         loop {
             let (wants, ads) = tokio::join!(board.wants(), board.ads());
-            if !o.send(Event::Wants(wants.ok())) || !o.send(Event::Ads(ads.ok())) {
+            if !o.send(Event::Wants(wants.ok())).await || !o.send(Event::Ads(ads.ok())).await {
                 return;
             }
             sleep(every).await;
@@ -92,7 +94,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
     let (o, every) = (out.clone(), Duration::from_secs(refresh.files_secs.max(1)));
     tokio::spawn(async move {
         loop {
-            if !o.send(Event::Swaps(swaps.swaps().await.ok())) {
+            if !o.send(Event::Swaps(swaps.swaps().await.ok())).await {
                 return;
             }
             sleep(every).await;
@@ -110,7 +112,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
                     }
                     continue;
                 }
-                if !o.send(Event::Eth(gas.eth(&account).await.ok())) {
+                if !o.send(Event::Eth(gas.eth(&account).await.ok())).await {
                     return;
                 }
                 sleep(every).await;
@@ -135,9 +137,9 @@ mod tests {
             signal: Some(Signal::Started(Identity { pool_account: "0xpool".into(), ..Default::default() })),
             ..LogEntry::plain(Level::Info, "fast bridge LP")
         };
-        let (wake_tx, _wake_rx) = unbounded_channel();
+        let (wake_tx, _wake_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut rx = start(create_memory_ports(data, vec![started]), &Refresh::default(), String::new(), Wake::new(wake_tx));
+        let mut rx = start(create_memory_ports(data, vec![started]), &Refresh::default(), String::new(), Wake::new(wake_tx, Default::default()));
         let mut seen = Vec::new();
         while seen.len() < 7 {
             seen.push(rx.recv().await.expect("the feed is running"));

@@ -190,12 +190,13 @@ impl State {
     }
 
     /// Private TAC not promised to anyone: what the provider says it can take now, or the log's last word.
-    pub fn free(&self) -> u128 {
-        self.terms.as_ref().and_then(|t| t.available).unwrap_or(self.cap.held.saturating_sub(self.cap.promised))
+    /// `None` when neither the provider nor its log has said: there is no figure, and zero would be made up.
+    pub fn free(&self) -> Option<u128> {
+        self.terms.as_ref().and_then(|t| t.available).or_else(|| self.cap_seen.then(|| self.cap.held.saturating_sub(self.cap.promised)))
     }
-    /// `false` when neither the provider nor its log has said: there is no figure, and zero would be made up.
-    pub fn free_known(&self) -> bool {
-        self.cap_seen || self.terms.as_ref().is_some_and(|t| t.available.is_some())
+    /// Whether the swap records have ever been read: until they have, the totals from them are nothing, not zero.
+    pub fn swaps_known(&self) -> bool {
+        self.swaps_ok || !self.swaps.is_empty()
     }
     /// How old the log's capacity figures are, where the line gave a time.
     pub fn cap_age(&self) -> Option<u64> {
@@ -343,14 +344,14 @@ mod tests {
     #[test]
     fn free_is_not_known_before_anything_has_said() {
         let mut st = state();
-        let before = st.free_known();
+        let before = st.free();
 
         st.apply(Event::Log(LogEntry {
             signal: Some(Signal::Capacity(Capacity { held: 500, promised: 200, open: 1, holds: 0 })),
             ..LogEntry::plain(Level::Info, "capacity")
         }));
 
-        assert_eq!((before, st.free_known()), (false, true));
+        assert_eq!((before, st.free()), (None, Some(300)));
     }
 
     #[test]
@@ -412,6 +413,6 @@ mod tests {
 
         st.apply(Event::Terms(Some(Terms { available: Some(250), ..Default::default() })));
 
-        assert_eq!((from_log, st.free()), (300, 250));
+        assert_eq!((from_log, st.free()), (Some(300), Some(250)));
     }
 }

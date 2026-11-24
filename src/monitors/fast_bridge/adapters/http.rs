@@ -9,8 +9,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::time::Duration;
 
-/// The most one answer may hold. The board's lists are a few kilobytes; this is room to grow, not a target.
-const MAX_BODY: usize = 4 << 20;
+/// The most one answer may hold. The board's lists are a few kilobytes. Parsed JSON takes many times its bytes in
+/// memory, so this is kept small: it is the bound on memory, not only on the read.
+const MAX_BODY: usize = 256 << 10;
 
 /// The most entries taken from one board list. The public board holds tens; past this it is a flood, not demand.
 const MAX_ITEMS: usize = 5_000;
@@ -50,13 +51,15 @@ async fn get(http: &reqwest::Client, url: &str) -> Result<Value> {
     json_body(succeeded(http.get(url).send().await?)?).await
 }
 
-/// A JSON body from an error status too: `/health` answers 503 with the error in the body. Never from a redirect.
-async fn get_or_error_body(http: &reqwest::Client, url: &str) -> Result<Value> {
+/// A JSON body from an error status too, with whether the status was a success: `/health` answers 503 with the
+/// error in the body. Never from a redirect.
+async fn get_or_error_body(http: &reqwest::Client, url: &str) -> Result<(bool, Value)> {
     let resp = http.get(url).send().await?;
-    if resp.status().is_redirection() || resp.status().is_informational() {
-        bail!("answered {}", resp.status());
+    let status = resp.status();
+    if status.is_redirection() || status.is_informational() {
+        bail!("answered {status}");
     }
-    json_body(resp).await
+    Ok((status.is_success(), json_body(resp).await?))
 }
 
 pub struct HttpProvider {
@@ -73,7 +76,12 @@ impl Provider for HttpProvider {
         Box::pin(async move { wire::terms(&get(&self.http, &format!("{}/info", self.base)).await?).context("/info answered without terms") })
     }
     fn health(&self) -> Fut<'_, Health> {
-        Box::pin(async move { Ok(wire::health(&get_or_error_body(&self.http, &format!("{}/health", self.base)).await?)) })
+        Box::pin(async move {
+            let (succeeded, body) = get_or_error_body(&self.http, &format!("{}/health", self.base)).await?;
+            let h = wire::health(&body);
+            // a failed status is never healthy, whatever its body says
+            Ok(Health { ok: h.ok && succeeded, error: if h.error.is_empty() && !succeeded { "/health answered an error status".into() } else { h.error } })
+        })
     }
 }
 
@@ -91,10 +99,10 @@ impl HttpBoard {
     async fn list(&self, path: &str) -> Result<Vec<Value>> {
         let mut out = None::<Vec<Value>>;
         for b in &self.boards {
-            let Ok(v) = get(&self.http, &format!("{b}/{path}")).await else { continue };
+            let Ok(mut v) = get(&self.http, &format!("{b}/{path}")).await else { continue };
             // a flooded list is not read at all: part of it would be drawn as the whole market
-            let Some(items) = v.get(path).and_then(Value::as_array).filter(|items| items.len() <= MAX_ITEMS) else { continue };
-            out.get_or_insert_with(Vec::new).extend(items.iter().cloned());
+            let Some(Value::Array(items)) = v.get_mut(path).map(Value::take).filter(|l| l.as_array().is_some_and(|l| l.len() <= MAX_ITEMS)) else { continue };
+            out.get_or_insert_with(Vec::new).extend(items);
         }
         out.ok_or_else(|| anyhow!("no board answered /{path}"))
     }
@@ -180,6 +188,15 @@ mod tests {
         let health = create_http_provider(create_http_client(), &base).health().await.expect("an answer");
 
         assert_eq!(health, Health { ok: false, error: "tick failed".into() });
+    }
+
+    #[tokio::test]
+    async fn a_failed_status_is_never_healthy_whatever_its_body_says() {
+        let base = serve_once("500 Internal Server Error".into(), r#"{"ok":true}"#).await;
+
+        let health = create_http_provider(create_http_client(), &base).health().await.expect("an answer");
+
+        assert_eq!(health, Health { ok: false, error: "/health answered an error status".into() });
     }
 
     #[tokio::test]

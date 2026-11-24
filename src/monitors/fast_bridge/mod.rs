@@ -23,14 +23,14 @@ use feed::Event;
 use ports::Ports;
 use ratatui::{Frame, crossterm::event::KeyEvent, layout::Rect};
 use state::{Page, State};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
 
 pub struct FastBridge {
     cfg: FastBridgeConfig,
     state: State,
     /// Held until `start` hands them to the feed.
     ports: Option<Ports>,
-    events: Option<UnboundedReceiver<Event>>,
+    events: Option<Receiver<Event>>,
 }
 
 pub fn create_fast_bridge(cfg: &FastBridgeConfig, demo: bool) -> FastBridge {

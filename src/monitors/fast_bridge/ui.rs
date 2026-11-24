@@ -70,9 +70,12 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
         vec![
             label("free "),
             // a figure nothing has given yet is a dash, never a zero
-            if st.free_known() { Span::styled(tac(free), bold.fg(if free == 0 || st.free_from_log().is_some() { th.warn } else { th.good })) } else { dash() },
+            match free {
+                Some(f) => Span::styled(tac(f), bold.fg(if f == 0 || st.free_from_log().is_some() { th.warn } else { th.good })),
+                None => dash(),
+            },
             // the provider's own answer is not behind this number: say whose word it is
-            if st.free_known() && st.free_from_log().is_some() { Span::styled(" (from the log)", Style::new().fg(th.warn)) } else { Span::raw("") },
+            if free.is_some() && st.free_from_log().is_some() { Span::styled(" (from the log)", Style::new().fg(th.warn)) } else { Span::raw("") },
         ],
         vec![label("promised "), if st.cap_seen { Span::styled(tac(st.cap.promised), bold) } else { dash() }],
         vec![
@@ -88,9 +91,10 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
                 th.dim(),
             ),
         ],
-        vec![label("│  on Bitcoin: received "), Span::styled(tac(st.received()), bold)],
-        vec![label("incoming "), Span::styled(tac(st.incoming()), bold)],
-        vec![label("│  fees earned "), Span::styled(tac(st.earned()), bold.fg(th.accent))],
+        // the same rule for what comes from the swap records
+        vec![label("│  on Bitcoin: received "), if st.swaps_known() { Span::styled(tac(st.received()), bold) } else { dash() }],
+        vec![label("incoming "), if st.swaps_known() { Span::styled(tac(st.incoming()), bold) } else { dash() }],
+        vec![label("│  fees earned "), if st.swaps_known() { Span::styled(tac(st.earned()), bold.fg(th.accent)) } else { dash() }],
     ];
     let status = vec![
         vec![light(st.healthy, th), label(" health")],
@@ -271,7 +275,8 @@ fn market(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         .ads
         .iter()
         .map(|a| {
-            let me = a.claim_pub == st.id.claim_pub && !st.id.claim_pub.is_empty();
+            // the ad this provider's own terms pick out, not every ad that names its key
+            let me = st.my_ad().is_some_and(|mine| std::ptr::eq(mine, a));
             let t = &a.terms;
             let avail = match t.available {
                 Some(0) => right("full".into()).style(th.dim()),
@@ -375,12 +380,20 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         out.push(Line::from(format!("  {} waiting are under your min of {}.", adv.under_count, tac(t.min))));
     }
     out.extend([Line::from(""), head("Funding")]);
-    out.push(Line::from(format!("  In range now: {} TAC waiting. You have {} free.", tac(adv.in_range_volume), tac(free))));
-    out.push(if adv.in_range_volume > free {
-        Line::from(Span::styled(format!("  {} more TAC would cover all of it at once.", tac(adv.in_range_volume - free)), Style::new().fg(th.warn)))
-    } else {
-        Line::from(Span::styled("  You can cover all of it.", Style::new().fg(th.good)))
-    });
+    match free {
+        Some(free) => {
+            out.push(Line::from(format!("  In range now: {} TAC waiting. You have {} free.", tac(adv.in_range_volume), tac(free))));
+            out.push(if adv.in_range_volume > free {
+                Line::from(Span::styled(format!("  {} more TAC would cover all of it at once.", tac(adv.in_range_volume - free)), Style::new().fg(th.warn)))
+            } else {
+                Line::from(Span::styled("  You can cover all of it.", Style::new().fg(th.good)))
+            });
+        }
+        None => {
+            out.push(Line::from(format!("  In range now: {} TAC waiting.", tac(adv.in_range_volume))));
+            out.push(Line::from(Span::styled("  How much TAC is free is not known yet, so cover cannot be judged.", Style::new().fg(th.warn))));
+        }
+    }
     out.extend([
         Line::from(""),
         faint("  A waiting bridge is one no provider online could take when it was"),

@@ -3,18 +3,44 @@
 use super::wire;
 use crate::monitors::fast_bridge::{
     model::{Level, LogEntry, Swap},
-    ports::{Fut, LogFeed, SwapStore},
+    ports::{Fut, LogFeed, QUEUE, SwapStore},
 };
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use anyhow::bail;
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, BufReader},
-    sync::mpsc::{UnboundedReceiver, unbounded_channel},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, BufReader},
+    sync::mpsc::{Receiver, channel},
 };
 
 /// The most of one log line that is kept. The provider's lines are a few hundred bytes.
 const MAX_LINE: usize = 64 << 10;
 /// The most one swap record may hold. The provider's are a few kilobytes.
 const MAX_RECORD: u64 = 1 << 20;
+/// The most records read in one pass. Past this the read fails: a part of the records would be drawn as all of them.
+const MAX_RECORDS: usize = 20_000;
+/// How long one record may take to open and read. A pipe put where a record was never opens.
+const RECORD_WAIT: Duration = Duration::from_secs(2);
+
+/// One record's bytes, or `None` for anything that is not an ordinary file of a record's size. The size is checked
+/// on the open file and the read stops at the limit, so a file changed after the check cannot be read past it.
+async fn record(p: &Path) -> Option<Vec<u8>> {
+    // a link is not a record: it could point at any file this user can read
+    if !tokio::fs::symlink_metadata(p).await.ok()?.is_file() {
+        return None;
+    }
+    let file = tokio::fs::File::open(p).await.ok()?;
+    let meta = file.metadata().await.ok()?;
+    if !meta.is_file() || meta.len() > MAX_RECORD {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_RECORD + 1).read_to_end(&mut bytes).await.ok()?;
+    u64::try_from(bytes.len()).is_ok_and(|n| n <= MAX_RECORD).then_some(bytes)
+}
 
 /// The next line, without its newline. Bytes that are not UTF-8 become the replacement character and a line over
 /// `MAX_LINE` is cut there, with the rest read and dropped: neither ends the feed or grows without bound. `None` at the end.
@@ -49,8 +75,8 @@ pub fn create_command_log(cmd: &[String]) -> CommandLog {
 }
 
 impl LogFeed for CommandLog {
-    fn start(self: Box<Self>) -> UnboundedReceiver<LogEntry> {
-        let (tx, rx) = unbounded_channel();
+    fn start(self: Box<Self>) -> Receiver<LogEntry> {
+        let (tx, rx) = channel(QUEUE);
         tokio::spawn(async move {
             let Some((prog, args)) = self.cmd.split_first() else { return };
             loop {
@@ -60,7 +86,7 @@ impl LogFeed for CommandLog {
                     Ok(c) => c,
                     Err(e) => {
                         // not retried: a command that cannot start will not start in five seconds either
-                        let _ = tx.send(LogEntry::plain(Level::Warn, format!("log_cmd could not be started ({prog}): {e}")));
+                        let _ = tx.send(LogEntry::plain(Level::Warn, format!("log_cmd could not be started ({prog}): {e}"))).await;
                         return;
                     }
                 };
@@ -69,7 +95,7 @@ impl LogFeed for CommandLog {
                     match next_line(&mut out).await {
                         Ok(Some(line)) => {
                             if let Some(entry) = wire::log_line(&line)
-                                && tx.send(entry).is_err()
+                                && tx.send(entry).await.is_err()
                             {
                                 return;
                             }
@@ -80,7 +106,7 @@ impl LogFeed for CommandLog {
                     }
                 };
                 let _ = child.kill().await;
-                if tx.send(LogEntry::plain(Level::Warn, format!("{why}; starting it again in 5 s"))).is_err() {
+                if tx.send(LogEntry::plain(Level::Warn, format!("{why}; starting it again in 5 s"))).await.is_err() {
                     return;
                 }
                 tokio::time::sleep(Duration::from_secs(5)).await;
@@ -103,18 +129,20 @@ impl SwapStore for FileSwaps {
         Box::pin(async move {
             let mut rd = tokio::fs::read_dir(&self.dir).await?;
             let mut out = Vec::new();
+            let mut seen = 0usize;
             while let Some(e) = rd.next_entry().await? {
+                seen += 1;
+                if seen > MAX_RECORDS {
+                    bail!("more than {MAX_RECORDS} entries in the swap records");
+                }
                 let p = e.path();
                 // the store keeps .bak and .tmp files beside each record
                 if p.extension().is_none_or(|x| x != "json") {
                     continue;
                 }
-                // only an ordinary file of a record's size: a pipe would never end and a link to a device never stops
-                if !tokio::fs::metadata(&p).await.is_ok_and(|m| m.is_file() && m.len() <= MAX_RECORD) {
-                    continue;
-                }
                 // a record caught mid-write is skipped and read whole on the next pass
-                if let Some(s) = tokio::fs::read(&p).await.ok().and_then(|b| serde_json::from_slice(&b).ok()).and_then(|v| wire::swap(&v)) {
+                let bytes = tokio::time::timeout(RECORD_WAIT, record(&p)).await.ok().flatten();
+                if let Some(s) = bytes.and_then(|b| serde_json::from_slice(&b).ok()).and_then(|v| wire::swap(&v)) {
                     out.push(s);
                 }
             }
@@ -134,6 +162,24 @@ mod tests {
             out.push(l);
         }
         out
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn only_ordinary_files_of_a_records_size_are_read() {
+        let dir = std::env::temp_dir().join(format!("tacmon-test-{}", std::process::id()));
+        let swaps = dir.join("swaps");
+        std::fs::create_dir_all(&swaps).expect("a directory");
+        let good = r#"{"id":"aa","phase":"done","offer":{"btc":{"value":"2"},"evm":{"amount":"1"}}}"#;
+        std::fs::write(swaps.join("good.json"), good).expect("a record");
+        std::fs::write(dir.join("elsewhere.json"), good).expect("a file outside");
+        std::os::unix::fs::symlink(dir.join("elsewhere.json"), swaps.join("link.json")).expect("a link");
+        std::fs::write(swaps.join("huge.json"), vec![b' '; usize::try_from(MAX_RECORD).expect("fits") + 1]).expect("a large file");
+
+        let read = create_file_swaps(&dir).swaps().await.expect("a read");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(read.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["aa"]);
     }
 
     #[tokio::test]

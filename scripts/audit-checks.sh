@@ -95,7 +95,8 @@ scope_covers() {
       echo "UNLISTED   $f"
       rc=1
     fi
-  done < <(git ls-files '*.rs')
+  # not audits/: a leg may leave a small Rust program there as evidence, and it is a record, not the code under review
+  done < <(git ls-files '*.rs' ':!audits/')
   return "$rc"
 }
 gate scope "every tracked .rs file is in audits/SCOPE or excluded there with a reason" scope_covers

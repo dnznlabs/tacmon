@@ -3,14 +3,15 @@
 use super::model::{Terms, Want, effective_bps, fee_on, total};
 
 /// Why a provider with these terms and this much free TAC is not taking a waiting bridge, or `None` when it could.
-pub fn blocker(terms: &Terms, free: u128, w: &Want) -> Option<&'static str> {
+/// `free` unknown is not zero: the bridge is then judged on the terms alone.
+pub fn blocker(terms: &Terms, free: Option<u128>, w: &Want) -> Option<&'static str> {
     if w.amount > terms.max {
         Some("over your max")
     } else if w.amount < terms.min {
         Some("under your min")
     } else if w.max_fee_bps.is_some_and(|cap| effective_bps(w.amount, terms.fee_bps, terms.flat) > cap) {
         Some("fee over their cap")
-    } else if w.amount > free {
+    } else if free.is_some_and(|free| w.amount > free) {
         Some("not enough free TAC")
     } else {
         None
@@ -90,12 +91,21 @@ mod tests {
 
     #[test]
     fn blocker_names_the_first_thing_in_the_way() {
-        let (t, free) = (terms(), 200 * UNIT);
+        let (t, free) = (terms(), Some(200 * UNIT));
         let wants = [want(600, None), want(5, None), want(100, Some(100)), want(300, None), want(100, None)];
 
         let why = wants.each_ref().map(|w| blocker(&t, free, w));
 
         assert_eq!(why, [Some("over your max"), Some("under your min"), Some("fee over their cap"), Some("not enough free TAC"), None]);
+    }
+
+    #[test]
+    fn free_tac_that_is_not_known_blocks_nothing() {
+        let t = terms();
+
+        let why = blocker(&t, None, &want(300, None));
+
+        assert_eq!(why, None);
     }
 
     #[test]
