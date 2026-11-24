@@ -322,6 +322,14 @@ for LOG in "${LEG_LOGS[@]}"; do
   mv "$LOG" "$OUT_DIR/transcripts/"
 done
 
+# Last, over everything the run wrote: check outputs, leg files, the rollup and the transcripts all
+# carry this machine's paths, and the audit is committed to a repo other people read.
+bash "$REPO_ROOT/scripts/audit-scrub.sh" "$OUT_DIR" "$SCRATCH" || die "audits/$AUDIT_DATE could not be scrubbed of this machine's paths — do not commit it as it is"
+
+# Compressed after the scrub, never before: a transcript is most of an audit's bytes, and the scrub
+# reads text.
+gzip -9n "$OUT_DIR"/transcripts/*
+
 info "AUDIT.md    $(wc -l < "$OUT_DIR/AUDIT.md") lines"
 info "checks      $CHECKS_PASS passed, $CHECKS_FAIL failed"
 info "legs        ${LEG_NAMES[*]}"

@@ -58,6 +58,7 @@ For anyone changing this repo, human or agent.
 - The scope is `audits/SCOPE`, one file per line. A new `.rs` file goes in it, or is excluded there with a reason, in the same change: `make audit-checks` fails otherwise.
 - A change that makes a claim in `SECURITY.md` untrue changes the claim in the same commit.
 - A new dependency licence, a git dependency or an ignored advisory is an edit to `deny.toml` with its reason.
+- `make audit` scrubs this machine's paths from what it writes (`scripts/audit-scrub.sh`). Never commit an `audits/<date>/` that step did not pass.
 - Audits are append-only: a past `audits/<date>/` is never edited. A wrong finding is corrected in the next `AUDIT.md`, marked as superseding.
 - A fix for a finding comes with a test that fails without it, and a row in `audits/TRIAGE.md`.
 

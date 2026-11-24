@@ -47,10 +47,23 @@ audits/
     checks/                          SUMMARY.txt and every check's whole output
     rust-review/
       <harness>-<model>/             one directory per leg: report.md and anything it wrote to show a finding
-    transcripts/                     everything each leg printed, tool calls included
+    transcripts/                     everything each leg printed, tool calls included, gzipped (`zcat` to read)
 ```
 
 The transcripts are the only evidence of what a leg read, so they are committed with the findings.
+
+### What is published
+
+An audit is committed to a repo other people read, and its raw output describes the machine it ran on. The
+last step of `make audit` runs `scripts/audit-scrub.sh` over the whole directory. It removes two things and
+nothing else:
+
+- **Absolute paths.** The repo's own path becomes `.`, the home directory `~`, the runner's scratch `<scratch>`.
+- **The harness's start-up record** in a transcript: the list of tools, plugins and directories installed on the
+  machine. It says nothing about the review.
+
+Every file a leg opened, every command it ran and every result stays. The run fails if a path it meant to remove
+is still there.
 
 **Audits are append-only: a past audit is never edited**, because the next one cites it. A finding that turns out
 to be wrong is corrected in the next `AUDIT.md`, marked as superseding. `make audit` enforces this: it refuses to

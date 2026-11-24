@@ -3,5 +3,5 @@ splash = false
 lp_url = "http://127.0.0.1:18701"
 boards = ["http://127.0.0.1:18702"]
 data_dir = "/nonexistent"
-log_cmd = ["/mnt/bigdata/machines/tacit-services/src/tacmon/.audit-leg/logs-utf8.sh"]
+log_cmd = ["./.audit-leg/logs-utf8.sh"]
 eth_rpc = ""

@@ -3,4 +3,4 @@ splash = false
 lp_url = "http://127.0.0.1:18799"
 boards = ["http://127.0.0.1:18721"]
 data_dir = "/nonexistent"
-log_cmd = ["/mnt/bigdata/machines/tacit-services/src/tacmon/.audit-leg/logs-merge.sh"]
+log_cmd = ["./.audit-leg/logs-merge.sh"]

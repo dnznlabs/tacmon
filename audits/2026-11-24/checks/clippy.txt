@@ -1,2 +1,2 @@
-    Checking tacmon v0.1.0-alpha (/mnt/bigdata/machines/tacit-services/src/tacmon)
+    Checking tacmon v0.1.0-alpha (.)
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s

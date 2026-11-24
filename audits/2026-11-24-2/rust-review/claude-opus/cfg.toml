@@ -2,5 +2,5 @@ splash = false
 [fast_bridge]
 lp_url = "http://127.0.0.1:18787"
 boards = ["http://127.0.0.1:18787"]
-data_dir = "/mnt/bigdata/machines/tacit-services/src/tacmon/.audit-leg/data"
-log_cmd = ["/mnt/bigdata/machines/tacit-services/src/tacmon/.audit-leg/log.sh"]
+data_dir = "./.audit-leg/data"
+log_cmd = ["./.audit-leg/log.sh"]

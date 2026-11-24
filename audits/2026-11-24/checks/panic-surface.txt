@@ -1,4 +1,4 @@
-    Checking tacmon v0.1.0-alpha (/mnt/bigdata/machines/tacit-services/src/tacmon)
+    Checking tacmon v0.1.0-alpha (.)
 warning: arithmetic operation that can potentially result in unexpected side-effects
   --> src/fmt.rs:26:19
    |

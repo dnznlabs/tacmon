@@ -1,6 +1,6 @@
-Info: Running script "cargo-deny" on /mnt/bigdata/machines/tacit-services/src/tacmon
+Info: Running script "cargo-deny" on .
 warning[duplicate]: found 2 duplicate entries for crate 'syn'
-    ┌─ /mnt/bigdata/machines/tacit-services/src/tacmon/Cargo.lock:153:1
+    ┌─ ./Cargo.lock:153:1
     │  
 153 │ ╭ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
 154 │ │ syn 3.0.10 registry+https://github.com/rust-lang/crates.io-index
