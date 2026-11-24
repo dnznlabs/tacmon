@@ -1,14 +1,25 @@
 # tacmon
 
-<!-- Project-specific only. Org-wide rules belong in ../shared/ORG.md. -->
+<!-- This file stands alone: everything a contributor needs is here. -->
 
-> `../shared` is an optional sibling checkout. Without it, only this file applies.
+> `../shared` is an optional sibling checkout that most contributors will not have. Nothing here depends on it.
 
 ## Overview
 
 `tacmon` is a terminal activity monitor for Tacit services, in the spirit of `htop` and `k9s`. Two levels: a
 **monitor** per kind of service, then that monitor's **pages**. One monitor exists, `fast-bridge`, for a fast bridge
 liquidity provider. Every monitor is read only: it never sees a service's key and never changes a service.
+
+## Working Agreements
+
+For anyone changing this repo, human or agent.
+
+- **Ask when it is unclear.** Do not guess at intent or architecture. Working unattended, take the most reasonable reading, carry on, and write the assumption down.
+- **Fit the solution to the problem.** The simplest thing that works. No flexibility that nothing needs yet.
+- **Leave unrelated code alone**, but say so when you find something wrong in it, so it can be its own change.
+- **Say what you are unsure of.** A small, low-risk experiment and its result is better than a confident guess.
+- **Better ideas are welcome**, most of all ones that outlast the task at hand.
+- **Report briefly.** Lead with the result. Length follows consequence, not effort; do not narrate the work.
 
 ## Repo Structure
 
@@ -29,6 +40,9 @@ liquidity provider. Every monitor is read only: it never sees a service's key an
 | `src/monitors/fast_bridge/state.rs` | what the pages draw, and what each event does to it |
 | `src/monitors/fast_bridge/advisor.rs` | fee and size arithmetic, pure |
 | `src/monitors/fast_bridge/ui.rs` | the header and one function per page |
+| `SECURITY.md` | the threat model and the numbered claims the reviews attack |
+| `audits/` | the review method, the scope, the prompts and one directory per past review |
+| `deny.toml` | what the dependency tree is held to |
 
 ## Commands
 
@@ -36,6 +50,16 @@ liquidity provider. Every monitor is read only: it never sees a service's key an
 - `make demo-video` records `docs/demo/demo.gif` and `demo.mp4`: `scripts/record-demo.py` drives `tacmon --demo` in a pseudo-terminal, `agg` renders the GIF and `ffmpeg` converts it. Re-record after a change to a page or the start screen.
 - `target/release/tacmon --snapshot [monitor/]<page>` draws one page to stdout as plain text: the way to check a page without a terminal. Add `--demo` for fixed data. `--snapshot splash` prints the start screen.
 - `tacmon --print-config > config.example.toml` after changing a default.
+- `make audit-checks` runs the security checks with one right answer; `make audit` adds the adversarial reviews and writes `audits/<date>/AUDIT.md`.
+
+## Audits
+
+- The method, prerequisites and provenance spec are `audits/README.md`. The claims under review are `SECURITY.md`.
+- The scope is `audits/SCOPE`, one file per line. A new `.rs` file goes in it, or is excluded there with a reason, in the same change: `make audit-checks` fails otherwise.
+- A change that makes a claim in `SECURITY.md` untrue changes the claim in the same commit.
+- A new dependency licence, a git dependency or an ignored advisory is an edit to `deny.toml` with its reason.
+- Audits are append-only: a past `audits/<date>/` is never edited. A wrong finding is corrected in the next `AUDIT.md`, marked as superseding.
+- A fix for a finding comes with a test that fails without it.
 
 ## Conventions
 
@@ -46,10 +70,37 @@ liquidity provider. Every monitor is read only: it never sees a service's key an
 - **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.
+- **Swapping what is behind a port touches one directory.** If changing a transport or a data source forces edits in `feed`, `state` or `ui`, the port is leaking: fix that first.
+- **The first adapter is a working local one, not a mock.** Tests swap an adapter, never the network, the clock or the filesystem. Reaching for heavy mocking means the boundary is in the wrong place.
+- **Keep what is public small.** `pub` only where another module needs it. Shared types live in one place.
+- **Set the pattern before the second copy.** The next monitor follows `fast_bridge`'s shape; change the shape for both rather than fork it.
 - Tests are Arrange-Act-Assert, with a blank line between the three.
+
+### Comments
+
+- Say why, not what. Code that reads clearly needs none.
+- Write down what the types do not show: a convention relied on, an ordering that matters, a failure swallowed on purpose, a fallback.
+- One line where possible. No section banners. Doc comments (`///`) for what other modules call, not for private helpers.
+
+### Documentation
+
+A change is not done until the documents describing what it changed are updated in the same change: `README.md`, this file, `SECURITY.md`, `config.example.toml`. A change that touches none of them can say so.
+
+## Commits
+
+- **Conventional commits:** `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `chore:`, with an optional scope (`fix(advisor): …`). A breaking change takes `!` and a `BREAKING CHANGE:` footer saying what changed and how to migrate.
+- **Subject under 72 characters.** For a small change that is the whole message.
+- **A body only when the subject is not enough:** a sentence or two of why. Not the diff, not what was tried first, not how it was verified.
+- Point at updated documents where it helps: `See: SECURITY.md`.
+- An agent ends its commits with `Co-Authored-By: <model> <noreply@anthropic.com>`, and commits or pushes only when asked.
+- Contributors work on a branch and open a pull request. CI (`.github/workflows/ci.yml`) runs `make lint`, `make test` and a locked release build on every pull request; all three must pass.
+- **Hooks check and report; they never rewrite files.** `scripts/pre-commit.sh` runs `cargo fmt --check` and clippy. Run `make fmt` yourself.
+- **Nothing private in a tracked file:** no keys, tokens, RPC URLs with credentials, or personal details. A hook scans each commit for secrets.
+- **A plain clone must work.** A tracked file may reach for `../shared`, but a missing checkout is a no-op, never a failure. `make init` is the one exception.
 
 ## Gotchas
 
+- `make audit` starts other agents in this tree and refuses to run while `.audit-leg/` exists.
 - Port methods return boxed futures (`ports::Fut`) so the traits stay object-safe; `async fn` in a trait would not be.
 - `Monitor::start` and `LogFeed::start` spawn tasks, so they must be called inside the tokio runtime.
 - The provider's log is read through `journalctl` by default; the swap records need read access to the provider's `dataDir`.

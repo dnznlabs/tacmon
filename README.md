@@ -56,12 +56,22 @@ Optional: `~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.t
 
 `fast_bridge.eth_rpc` is empty by default, so the pool account is sent to no RPC and its ETH balance is not shown. Set a URL to show it.
 
+## Security
+
+tacmon is read only: it never sees a key, signs nothing and writes nothing. It is reviewed by its own developer, not by an outside firm, and the work is in the open so it can be checked:
+
+- [SECURITY.md](SECURITY.md) states the threat model and ten claims, each with what holds it up.
+- `make audit-checks` holds the dependency tree to RustSec advisories, a licence list and crates.io only, and the crate to no `unsafe`.
+- `make audit` has language models from different labs attack those claims independently, and records what ran and what they found in [`audits/`](audits/README.md).
+
 ## Documentation
 
 | DOCUMENT | DESCRIPTION |
 |----------|-------------|
 | [Working Conventions](AGENTS.md) | Repo structure, commands, conventions and gotchas for contributors, human or agent |
 | [Example Configuration](config.example.toml) | Every setting, at its default |
+| [Security](SECURITY.md) | What tacmon is trusted with, the threat model, and the claims the reviews attack |
+| [Audits](audits/README.md) | How the self-review works, its limits, and every past review |
 
 ## Development
 
@@ -75,6 +85,8 @@ make lint           # Check formatting and run clippy, as the pre-commit hook do
 make run            # Run tacmon against the services on this machine
 make demo           # Run tacmon on made-up data
 make demo-video     # Record docs/demo/ (GIF and MP4) from the demo
+make audit-checks   # Security checks: advisories, licences, sources, unsafe, clippy, tests
+make audit          # The checks, then adversarial reviews, reconciled into audits/<date>/AUDIT.md
 make help           # List every command
 ```
 

@@ -9,3 +9,7 @@
 
 # The recording `make demo-video` converts; the GIF is what is kept.
 docs/demo/demo.cast
+
+# Where a review leg writes during `make audit`. scripts/audit.sh moves it under audits/<date>/;
+# one left behind means a run died, and the next run refuses to start until it is looked at.
+.audit-leg/

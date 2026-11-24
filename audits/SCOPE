@@ -1,0 +1,40 @@
+# The files `make audit` reviews: one repo-relative path per line. `#` lines and blank lines are
+# ignored. The runner refuses to start without this file, or with one that names a missing file.
+#
+# In scope: everything that reads from outside the process, decides what is shown, or decides what
+# is built. That is all of the code, the manifest and the dependency policy.
+#
+# An excluded file is a line starting with `!`, then the path, then the reason. `make audit-checks`
+# fails if a tracked .rs file is neither listed nor excluded, so a new file cannot go unreviewed
+# by being forgotten.
+#
+# Not listed, each with its reason:
+#   Cargo.lock        322 packages; cargo-deny reads it against RustSec, a model reading it adds nothing
+#   scripts/, mk/     development tooling, never part of the binary
+#   docs/             recordings
+
+SECURITY.md
+Cargo.toml
+deny.toml
+src/config.rs
+src/fmt.rs
+src/main.rs
+src/monitors/fast_bridge/adapters/http.rs
+src/monitors/fast_bridge/adapters/local.rs
+src/monitors/fast_bridge/adapters/memory.rs
+src/monitors/fast_bridge/adapters/mod.rs
+src/monitors/fast_bridge/adapters/wire.rs
+src/monitors/fast_bridge/advisor.rs
+src/monitors/fast_bridge/config.rs
+src/monitors/fast_bridge/feed.rs
+src/monitors/fast_bridge/model.rs
+src/monitors/fast_bridge/mod.rs
+src/monitors/fast_bridge/ports.rs
+src/monitors/fast_bridge/state.rs
+src/monitors/fast_bridge/ui.rs
+src/monitors/mod.rs
+src/shell/mod.rs
+src/shell/monitor.rs
+src/shell/splash.rs
+src/shell/theme.rs
+src/shell/widgets.rs

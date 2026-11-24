@@ -1,6 +1,44 @@
 {
   "lockfile_version": "1",
   "packages": {
+    "cargo-deny@0.21.0": {
+      "last_modified": "2026-11-22T18:15:35Z",
+      "resolved": "github:NixOS/nixpkgs/619c39f6eac5d1ed6b8f073a9414baf7034b2356#cargo-deny",
+      "source": "devbox-search",
+      "version": "0.21.0",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/x059dz1vap0mcy4r6v9ljkg71cycndmz-cargo-deny-0.21.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/x059dz1vap0mcy4r6v9ljkg71cycndmz-cargo-deny-0.21.0"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/k6nfyrhs5abwmvywssgfcxx2mmj44b4z-cargo-deny-0.21.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/k6nfyrhs5abwmvywssgfcxx2mmj44b4z-cargo-deny-0.21.0"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/mi736pldiv2jm1xskl041dz0fs1cgwjz-cargo-deny-0.21.0",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/mi736pldiv2jm1xskl041dz0fs1cgwjz-cargo-deny-0.21.0"
+        }
+      }
+    },
     "git@latest": {
       "last_modified": "2026-11-22T18:15:35Z",
       "resolved": "github:NixOS/nixpkgs/619c39f6eac5d1ed6b8f073a9414baf7034b2356#git",

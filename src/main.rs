@@ -1,6 +1,8 @@
 //! tacmon: a terminal activity monitor for Tacit services. This file is the composition root: it reads the
 //! configuration, builds the monitors with their adapters, and hands them to the shell.
 
+#![forbid(unsafe_code)]
+
 mod config;
 mod fmt;
 mod monitors;
