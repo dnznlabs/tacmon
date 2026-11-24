@@ -4,7 +4,7 @@ A terminal activity monitor for Tacit services.
 
 by **Ðenizen.** // dxnzn.wei
 
-`tacmon` watches the services you run for [Tacit](https://github.com/src-company/tacit), in the spirit of `htop` and `k9s`. It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there is one monitor, `fast-bridge`, for a fast bridge liquidity provider. It is read only: it never sees a service's key and never changes a service.
+`tacmon` watches the services you run for [Tacit](https://tacit.finance), in the spirit of `htop` and `k9s`. It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there is one monitor, `fast-bridge`, for a fast bridge liquidity provider. It is read only: it never sees a service's key and never changes a service.
 
 ## Release Info
 
@@ -79,7 +79,7 @@ Ports and adapters: a monitor's state and pages depend on its ports, never on wh
 
 ## Credits
 
-Tacit and its fast bridge are by Src Co / z0r0z; `tacmon` only watches them. The terminal interface is built on [ratatui](https://ratatui.rs).
+[Tacit](https://tacit.finance) and its fast bridge ([source](https://github.com/src-company/tacit)) are by Src Co / z0r0z; `tacmon` only watches them. The terminal interface is built on [ratatui](https://ratatui.rs).
 
 ## Development Team
 
