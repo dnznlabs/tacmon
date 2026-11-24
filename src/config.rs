@@ -5,9 +5,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// The animated start screen. `--no-splash` turns it off for one run.
+    pub splash: bool,
     pub theme: ThemeConfig,
     pub fast_bridge: FastBridgeConfig,
 }
@@ -21,6 +23,12 @@ pub struct ThemeConfig {
     pub warn: String,
     pub bad: String,
     pub dim: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { splash: true, theme: ThemeConfig::default(), fast_bridge: FastBridgeConfig::default() }
+    }
 }
 
 impl Default for ThemeConfig {

@@ -2,6 +2,7 @@
 //! Two levels: a monitor (fast bridge, later others), then that monitor's pages.
 
 pub mod monitor;
+mod splash;
 pub mod theme;
 pub mod widgets;
 
@@ -73,13 +74,17 @@ impl Shell {
         self.refresh();
         let mut term = Terminal::new(TestBackend::new(width, height))?;
         term.draw(|f| self.draw(f))?;
-        let buf = term.backend().buffer();
-        let lines =
-            (0..buf.area.height).map(|y| (0..buf.area.width).filter_map(|x| buf.cell((x, y)).map(|c| c.symbol())).collect::<String>().trim_end().to_string());
-        Ok(lines.collect::<Vec<_>>().join("\n"))
+        Ok(text_of(term.backend().buffer()))
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    /// The start screen as plain text, fully drawn: what `--snapshot splash` prints.
+    pub fn splash_snapshot(&self, width: u16, height: u16) -> Result<String> {
+        let mut term = Terminal::new(TestBackend::new(width, height))?;
+        term.draw(|f| splash::draw(f, 1.0, &self.theme))?;
+        Ok(text_of(term.backend().buffer()))
+    }
+
+    pub async fn run(&mut self, splash: bool) -> Result<()> {
         self.spawn_input();
         let tick = self.tx.clone();
         tokio::spawn(async move {
@@ -89,6 +94,15 @@ impl Shell {
         });
         let mut term = ratatui::init();
         let res = async {
+            // the monitors are already reading, so the start screen costs no time the first page would not
+            let began = tokio::time::Instant::now();
+            while splash && began.elapsed() < splash::LENGTH + splash::HOLD {
+                term.draw(|f| splash::draw(f, (began.elapsed().as_secs_f32() / splash::LENGTH.as_secs_f32()).min(1.0), &self.theme))?;
+                // any key ends it; the key itself is not acted on, so a stray "q" does not quit before anything is seen
+                if let Ok(Some(Msg::Key(_))) = tokio::time::timeout(splash::FRAME, self.rx.recv()).await {
+                    break;
+                }
+            }
             while !self.quit {
                 self.refresh();
                 term.draw(|f| self.draw(f))?;
@@ -181,4 +195,10 @@ impl Shell {
         let keys = format!(" 1-{}/tab page{} · {} · q quit", m.pages().len(), if many { " · m monitor" } else { "" }, m.hints(self.page));
         f.render_widget(Paragraph::new(keys).style(th.dim()), foot);
     }
+}
+
+fn text_of(buf: &ratatui::buffer::Buffer) -> String {
+    let lines =
+        (0..buf.area.height).map(|y| (0..buf.area.width).filter_map(|x| buf.cell((x, y)).map(|c| c.symbol())).collect::<String>().trim_end().to_string());
+    lines.collect::<Vec<_>>().join("\n")
 }

@@ -12,7 +12,7 @@ by **Ðenizen.** // dxnzn.wei
 
 | STATUS | VERSION | MONITORS |
 |:---|:---|:---|
-| `pre-mvp` | `0.1alpha` | `fast-bridge` |
+| `pre-mvp` | `0.1.0-alpha` | `fast-bridge` |
 
 This is pre-release software. The pages have been checked against one live provider and against made-up data (`--demo`); the interactive screen has had little use beyond that.
 
@@ -44,6 +44,7 @@ The header is on every page: TAC free / promised / held, TAC on Bitcoin (receive
 tacmon                        # Watch the services on this machine
 tacmon --demo                 # Made-up data: nothing is read from this machine or the network
 tacmon --snapshot demand      # One page as plain text, for scripts and bug reports
+tacmon --no-splash             # Skip the animated start screen
 tacmon --print-config         # The effective configuration, as TOML
 ```
 

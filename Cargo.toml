@@ -1,6 +1,6 @@
 [package]
 name = "tacmon"
-version = "0.1.0"
+version = "0.1.0-alpha"
 edition = "2024"
 description = "A terminal activity monitor for Tacit services"
 license = "MIT"

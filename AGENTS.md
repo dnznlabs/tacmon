@@ -19,6 +19,7 @@ liquidity provider. Every monitor is read only: it never sees a service's key an
 | `src/fmt.rs` | formatting every monitor shares |
 | `src/shell/` | the terminal, the event loop, the shared keys, the frame around a monitor |
 | `src/shell/monitor.rs` | the `Monitor` trait: the port every monitor implements |
+| `src/shell/splash.rs` | the animated start screen: the Tacit mark in braille, drawn from the brand SVG's geometry |
 | `src/shell/widgets.rs` | drawing pieces monitors share, so pages look like one tool |
 | `src/monitors/mod.rs` | `create_monitors`: the one place that lists the monitors |
 | `src/monitors/fast_bridge/model.rs` | the domain: no I/O, no wire formats |
@@ -32,7 +33,7 @@ liquidity provider. Every monitor is read only: it never sees a service's key an
 ## Commands
 
 - `make build`, `make test`, `make fmt`, `make lint`, `make run`, `make demo`
-- `target/release/tacmon --snapshot [monitor/]<page>` draws one page to stdout as plain text: the way to check a page without a terminal. Add `--demo` for fixed data.
+- `target/release/tacmon --snapshot [monitor/]<page>` draws one page to stdout as plain text: the way to check a page without a terminal. Add `--demo` for fixed data. `--snapshot splash` prints the start screen.
 - `tacmon --print-config > config.example.toml` after changing a default.
 
 ## Conventions

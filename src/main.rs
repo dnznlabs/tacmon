@@ -24,7 +24,10 @@ struct Args {
     /// Run on made-up data: nothing is read from this machine or the network
     #[arg(long)]
     demo: bool,
-    /// Draw one page once to stdout as plain text and exit: PAGE or MONITOR/PAGE (fast-bridge/demand)
+    /// Skip the animated start screen
+    #[arg(long)]
+    no_splash: bool,
+    /// Draw one page once to stdout as plain text and exit: PAGE, MONITOR/PAGE (fast-bridge/demand) or "splash"
     #[arg(long, value_name = "PAGE")]
     snapshot: Option<String>,
     /// With --snapshot: seconds to gather data before drawing
@@ -46,15 +49,19 @@ async fn main() -> Result<()> {
     let mut shell = Shell::new(monitors::create_monitors(&cfg, args.demo), Theme::from_config(&cfg.theme))?;
     match &args.snapshot {
         Some(target) => {
-            shell.show(target)?;
             let (w, h) = args
                 .size
                 .split_once('x')
                 .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
                 .ok_or_else(|| anyhow!("--size is COLSxROWS, like 140x40"))?;
+            if target == "splash" {
+                println!("{}", shell.splash_snapshot(w, h)?);
+                return Ok(());
+            }
+            shell.show(target)?;
             println!("{}", shell.snapshot(Duration::from_secs(args.wait), w, h).await?);
             Ok(())
         }
-        None => shell.run().await,
+        None => shell.run(cfg.splash && !args.no_splash).await,
     }
 }

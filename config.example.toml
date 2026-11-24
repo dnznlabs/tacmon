@@ -1,3 +1,5 @@
+splash = true
+
 [theme]
 accent = "cyan"
 good = "green"
