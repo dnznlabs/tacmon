@@ -1,4 +1,4 @@
-# tac-mon
+# tacmon
 
 <!-- Project-specific only. Org-wide rules belong in ../shared/ORG.md. -->
 

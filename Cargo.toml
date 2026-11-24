@@ -1,10 +1,10 @@
 [package]
-name = "tac-mon"
+name = "tacmon"
 version = "0.1.0"
 edition = "2024"
 description = "A terminal activity monitor for Tacit services"
 license = "MIT"
-repository = "https://github.com/dnznlabs/tac-mon"
+repository = "https://github.com/dnznlabs/tacmon"
 
 [[bin]]
 name = "tacmon"
