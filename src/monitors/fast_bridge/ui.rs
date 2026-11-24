@@ -39,18 +39,27 @@ pub fn header(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let free = st.free();
     let money = Line::from(vec![
         label("free "),
-        Span::styled(tac(free), bold.fg(if free == 0 || st.free_from_log().is_some() { th.warn } else { th.good })),
-        // the provider's own answer is not behind this number: say whose word it is and how old
-        match st.free_from_log() {
-            Some(Some(age)) => Span::styled(format!(" (from the log, {} ago)", dur(age)), Style::new().fg(th.warn)),
-            Some(None) => Span::styled(" (from the log)", Style::new().fg(th.warn)),
-            None => Span::raw(""),
+        // a figure nothing has given yet is a dash, never a zero
+        if st.free_known() {
+            Span::styled(tac(free), bold.fg(if free == 0 || st.free_from_log().is_some() { th.warn } else { th.good }))
+        } else {
+            Span::styled("—", th.dim())
         },
+        // the provider's own answer is not behind this number: say whose word it is
+        if st.free_known() && st.free_from_log().is_some() { Span::styled(" (from the log)", Style::new().fg(th.warn)) } else { Span::raw("") },
         label("   promised "),
-        Span::styled(tac(st.cap.promised), bold),
+        if st.cap_seen { Span::styled(tac(st.cap.promised), bold) } else { Span::styled("—", th.dim()) },
         label("   held "),
-        Span::styled(tac(st.cap.held), bold),
-        Span::styled(format!("  ({} open, {} holds)", st.cap.open, st.cap.holds), th.dim()),
+        if st.cap_seen { Span::styled(tac(st.cap.held), bold) } else { Span::styled("—", th.dim()) },
+        // promised and held are always the log's last word, so they always carry its age
+        Span::styled(
+            match (st.cap_seen, st.cap_age()) {
+                (false, _) => "  (no capacity line in the log yet)".to_string(),
+                (true, Some(age)) => format!("  ({} open, {} holds · log, {} ago)", st.cap.open, st.cap.holds, dur(age)),
+                (true, None) => format!("  ({} open, {} holds · log)", st.cap.open, st.cap.holds),
+            },
+            th.dim(),
+        ),
         label("  │  on Bitcoin: received "),
         Span::styled(tac(st.received()), bold),
         label("   incoming "),
@@ -62,9 +71,9 @@ pub fn header(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         light(st.healthy, th),
         label(" health   "),
         // unknown, not red, while the board itself is not answering
-        light(st.ads_ok.then(|| st.my_ad().is_some()), th),
+        light(st.on_board(), th),
         label(" on board   "),
-        if st.ad_contested() { Span::styled("another ad uses your key   ", Style::new().fg(th.bad)) } else { Span::raw("") },
+        if st.ad_contested() { Span::styled("an ad that is not yours uses your key   ", Style::new().fg(th.bad)) } else { Span::raw("") },
         light(Some(st.swaps_ok), th),
         label(" records   "),
         match &st.terms {
@@ -257,7 +266,11 @@ fn market(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             if me { row.style(Style::new().fg(th.accent).add_modifier(Modifier::BOLD)) } else { row }
         })
         .collect();
-    let title = format!(" Providers on the board · {} · cheapest first at 100 TAC ", st.ads.len());
+    let title = if st.ads_ok {
+        format!(" Providers on the board · {} · cheapest first at 100 TAC ", st.ads.len())
+    } else {
+        format!(" Providers on the board · {} · THE BOARD DOES NOT ANSWER: last known ", st.ads.len())
+    };
     let widths = [
         Constraint::Length(24),
         Constraint::Length(7),
@@ -305,7 +318,16 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         })
         .collect();
     let widths = [Constraint::Length(7), Constraint::Length(7), Constraint::Length(12), Constraint::Length(10), Constraint::Fill(1)];
-    f.render_widget(table(" Fee against what is waiting now ".into(), &["    FEE", "BRIDGES", "      VOLUME", "  YOU EARN", ""], rows, &widths, th), left);
+    f.render_widget(
+        table(
+            if st.board_ok { " Fee against what is waiting now ".into() } else { " Fee against what was waiting · THE BOARD DOES NOT ANSWER ".into() },
+            &["    FEE", "BRIDGES", "      VOLUME", "  YOU EARN", ""],
+            rows,
+            &widths,
+            th,
+        ),
+        left,
+    );
 
     let free = st.free();
     let head = |s: &'static str| Line::from(Span::styled(s, Style::new().fg(th.accent).add_modifier(Modifier::BOLD)));

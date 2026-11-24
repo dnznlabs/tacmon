@@ -52,7 +52,7 @@ These are what the review is told to break. Each names what holds it up.
 | 1 | No private key is read, requested or stored. | review; there is no code path that takes one |
 | 2 | Nothing is written to disk and no service is changed: every request is a read. | review |
 | 3 | No `unsafe` in this crate. | `#![forbid(unsafe_code)]`, enforced by the compiler; `make audit-checks` |
-| 4 | The only outbound connections are to hosts in the config, through the system proxy where one is set. A redirect is an error and is never followed. `--demo` makes none. | tests; review |
+| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. `--demo` makes none. | tests; review |
 | 5 | The only process started is `log_cmd`, with its arguments passed as a list and never through a shell. | review |
 | 6 | TLS is rustls with the platform's certificate checks; there is no way to switch verification off. | `deny.toml` bans other TLS stacks; review |
 | 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. | review |

@@ -57,7 +57,7 @@ impl Monitor for FastBridge {
         }
     }
     fn refresh(&mut self, now: u64) {
-        self.state.now = now;
+        self.state.tick(now);
         if let Some(rx) = &mut self.events {
             while let Ok(ev) = rx.try_recv() {
                 self.state.apply(ev);

@@ -41,6 +41,8 @@ pub struct State {
 
     pub id: Identity,
     pub cap: Capacity,
+    /// Whether any capacity line has been read: until one has, `cap` is nothing, not zero.
+    pub cap_seen: bool,
     /// When the provider wrote the capacity line `cap` came from, where the line said.
     pub cap_at: Option<u64>,
     pub terms: Option<Terms>,
@@ -73,6 +75,7 @@ impl State {
             only_warn: false,
             id: Identity { pool_account: cfg.pool_account.clone(), ..Default::default() },
             cap: Capacity::default(),
+            cap_seen: false,
             cap_at: None,
             terms: None,
             healthy: None,
@@ -90,6 +93,12 @@ impl State {
             fee_ladder_bps: cfg.advisor.fee_ladder_bps.clone(),
             pool_account_fixed: !cfg.pool_account.is_empty(),
         }
+    }
+
+    /// The clock moving on: a want past its time stops waiting whether or not the board has answered since.
+    pub fn tick(&mut self, now: u64) {
+        self.now = now;
+        self.wants.retain(|w| w.until == 0 || w.until > now);
     }
 
     /// A failed read (`None`) keeps the last value on screen and marks its source as not answering.
@@ -157,6 +166,7 @@ impl State {
             }
             Some(Signal::Capacity(c)) => {
                 self.cap = c.clone();
+                self.cap_seen = true;
                 self.cap_at = entry.at;
             }
             None => {}
@@ -183,6 +193,14 @@ impl State {
     pub fn free(&self) -> u128 {
         self.terms.as_ref().and_then(|t| t.available).unwrap_or(self.cap.held.saturating_sub(self.cap.promised))
     }
+    /// `false` when neither the provider nor its log has said: there is no figure, and zero would be made up.
+    pub fn free_known(&self) -> bool {
+        self.cap_seen || self.terms.as_ref().is_some_and(|t| t.available.is_some())
+    }
+    /// How old the log's capacity figures are, where the line gave a time.
+    pub fn cap_age(&self) -> Option<u64> {
+        self.cap_at.map(|at| self.now.saturating_sub(at))
+    }
     /// `Some` when `free` is the log's word and not the provider's answer: how old that word is, where the line gave a time.
     pub fn free_from_log(&self) -> Option<Option<u64>> {
         self.terms.as_ref().and_then(|t| t.available).is_none().then(|| self.cap_at.map(|at| self.now.saturating_sub(at)))
@@ -202,17 +220,21 @@ impl State {
     fn my_ads(&self) -> impl Iterator<Item = &Ad> {
         self.ads.iter().filter(|a| !self.id.claim_pub.is_empty() && a.claim_pub == self.id.claim_pub)
     }
-    /// More than one ad uses this provider's key: at most one of them is its own.
+    /// An ad under this provider's key that is not its own.
     pub fn ad_contested(&self) -> bool {
-        self.my_ads().nth(1).is_some()
+        self.my_ads().count() > usize::from(self.my_ad().is_some())
     }
-    /// The ad that is this provider's: the only one under its key, or among several the one carrying the terms it reports itself.
+    /// The ad that is this provider's: the one under its key carrying the terms it reports itself. While those terms
+    /// are not known, a lone ad under the key is taken at its word and one of several is not.
     pub fn my_ad(&self) -> Option<&Ad> {
-        if !self.ad_contested() {
-            return self.my_ads().next();
+        match &self.terms {
+            Some(own) => self.my_ads().find(|a| (a.terms.min, a.terms.max, a.terms.fee_bps, a.terms.flat) == (own.min, own.max, own.fee_bps, own.flat)),
+            None => self.my_ads().next().filter(|_| self.my_ads().nth(1).is_none()),
         }
-        let own = self.terms.as_ref()?;
-        self.my_ads().find(|a| (a.terms.min, a.terms.max, a.terms.fee_bps, a.terms.flat) == (own.min, own.max, own.fee_bps, own.flat))
+    }
+    /// `None` while it cannot be told: the board's ads were not read, or this provider's key is not known yet.
+    pub fn on_board(&self) -> Option<bool> {
+        (self.ads_ok && !self.id.claim_pub.is_empty()).then(|| self.my_ad().is_some())
     }
     pub fn name(&self) -> String {
         self.my_ad().map(|a| a.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "provider".into())
@@ -294,6 +316,52 @@ mod tests {
         st.apply(Event::Terms(Some(own)));
 
         assert_eq!((before_terms, st.name()), ((true, "provider".to_string()), "dx-lp".to_string()));
+    }
+
+    #[test]
+    fn a_lone_ad_under_the_key_with_other_terms_is_not_this_provider() {
+        let mut st = state();
+        st.id.claim_pub = "02me".into();
+        let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None };
+        let forged = Ad { name: "impostor".into(), claim_pub: "02me".into(), terms: Terms { fee_bps: 1, ..own.clone() }, any_tac: false, reverse: false };
+        st.apply(Event::Terms(Some(own)));
+
+        st.apply(Event::Ads(Some(vec![forged])));
+
+        assert_eq!((st.on_board(), st.ad_contested(), st.name()), (Some(false), true, "provider".to_string()));
+    }
+
+    #[test]
+    fn on_board_is_unknown_until_the_key_is_known() {
+        let mut st = state();
+
+        st.apply(Event::Ads(Some(vec![])));
+
+        assert_eq!(st.on_board(), None);
+    }
+
+    #[test]
+    fn free_is_not_known_before_anything_has_said() {
+        let mut st = state();
+        let before = st.free_known();
+
+        st.apply(Event::Log(LogEntry {
+            signal: Some(Signal::Capacity(Capacity { held: 500, promised: 200, open: 1, holds: 0 })),
+            ..LogEntry::plain(Level::Info, "capacity")
+        }));
+
+        assert_eq!((before, st.free_known()), (false, true));
+    }
+
+    #[test]
+    fn a_want_stops_waiting_when_its_time_passes_without_a_new_answer() {
+        let mut st = state();
+        st.apply(Event::Wants(Some(vec![Want { amount: 5, max_fee_bps: None, until: 1_000 }])));
+        st.apply(Event::Wants(None));
+
+        st.tick(1_001);
+
+        assert_eq!(st.wants.len(), 0);
     }
 
     #[test]

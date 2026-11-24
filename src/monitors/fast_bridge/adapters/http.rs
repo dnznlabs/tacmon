@@ -34,14 +34,26 @@ async fn json_body(mut resp: reqwest::Response) -> Result<Value> {
     Ok(serde_json::from_slice(&body)?)
 }
 
-/// A JSON body from an answer that succeeded.
-async fn get(http: &reqwest::Client, url: &str) -> Result<Value> {
-    json_body(http.get(url).send().await?.error_for_status()?).await
+/// Only a 2xx is an answer. A redirect is not followed, and the body that comes with one is not read as the answer either.
+fn succeeded(resp: reqwest::Response) -> Result<reqwest::Response> {
+    if !resp.status().is_success() {
+        bail!("answered {}", resp.status());
+    }
+    Ok(resp)
 }
 
-/// A JSON body whatever the status: `/health` answers 503 with the error in the body.
-async fn get_any_status(http: &reqwest::Client, url: &str) -> Result<Value> {
-    json_body(http.get(url).send().await?).await
+/// A JSON body from an answer that succeeded.
+async fn get(http: &reqwest::Client, url: &str) -> Result<Value> {
+    json_body(succeeded(http.get(url).send().await?)?).await
+}
+
+/// A JSON body from an error status too: `/health` answers 503 with the error in the body. Never from a redirect.
+async fn get_or_error_body(http: &reqwest::Client, url: &str) -> Result<Value> {
+    let resp = http.get(url).send().await?;
+    if resp.status().is_redirection() || resp.status().is_informational() {
+        bail!("answered {}", resp.status());
+    }
+    json_body(resp).await
 }
 
 pub struct HttpProvider {
@@ -58,7 +70,7 @@ impl Provider for HttpProvider {
         Box::pin(async move { wire::terms(&get(&self.http, &format!("{}/info", self.base)).await?).context("/info answered without terms") })
     }
     fn health(&self) -> Fut<'_, Health> {
-        Box::pin(async move { Ok(wire::health(&get_any_status(&self.http, &format!("{}/health", self.base)).await?)) })
+        Box::pin(async move { Ok(wire::health(&get_or_error_body(&self.http, &format!("{}/health", self.base)).await?)) })
     }
 }
 
@@ -106,7 +118,7 @@ impl GasBalance for RpcGas {
     fn eth<'a>(&'a self, account: &'a str) -> Fut<'a, f64> {
         Box::pin(async move {
             let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_getBalance", "params": [account, "latest"] });
-            let v = json_body(self.http.post(&self.rpc).json(&body).send().await?.error_for_status()?).await?;
+            let v = json_body(succeeded(self.http.post(&self.rpc).json(&body).send().await?)?).await?;
             let hex = v.get("result").and_then(Value::as_str).context("the RPC answered without a result")?;
             Ok(u128::from_str_radix(hex.trim_start_matches("0x"), 16)? as f64 / 1e18)
         })
@@ -138,7 +150,9 @@ mod tests {
     async fn a_redirect_is_an_error_and_is_not_followed() {
         let elsewhere = TcpListener::bind("127.0.0.1:0").await.expect("a port");
         let target = elsewhere.local_addr().expect("an address");
-        let base = serve_once(format!("307 Temporary Redirect\r\nLocation: http://{target}/info"), "").await;
+        // the body is terms a reader would accept: only the status says this is not the answer
+        let head = format!("307 Temporary Redirect\r\nLocation: http://{target}/info");
+        let base = serve_once(head, r#"{"minAmount":"1","maxAmount":"2","feeBps":1}"#).await;
 
         let terms = create_http_provider(create_http_client(), &base).terms().await;
 
@@ -162,6 +176,15 @@ mod tests {
         let health = create_http_provider(create_http_client(), &base).health().await.expect("an answer");
 
         assert_eq!(health, Health { ok: false, error: "tick failed".into() });
+    }
+
+    #[tokio::test]
+    async fn health_is_not_read_from_the_body_of_a_redirect() {
+        let base = serve_once("302 Found\r\nLocation: http://127.0.0.1:1/".into(), r#"{"ok":true}"#).await;
+
+        let health = create_http_provider(create_http_client(), &base).health().await;
+
+        assert!(health.is_err());
     }
 
     #[test]
