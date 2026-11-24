@@ -55,8 +55,18 @@ pub struct State {
     pub log: VecDeque<LogLine>,
     pub swaps: Vec<Swap>,
     pub swaps_ok: bool,
+    /// The wants and ads for the pair this provider serves. The board carries every pair: the rest are counted in
+    /// `other_wants` and `other_ads` and never drawn as this market.
     pub wants: Vec<Want>,
     pub ads: Vec<Ad>,
+    pub other_wants: usize,
+    pub other_ads: usize,
+    /// Everything the board last listed, whatever its pair, kept so the lists can be drawn again when the pair is learned.
+    all_wants: Vec<Want>,
+    all_ads: Vec<Ad>,
+    /// The pair the provider last said it serves. Kept when `/info` stops answering: a provider that cannot be
+    /// reached has not started serving every pair on the board.
+    pair: (Option<Asset>, Option<Asset>),
     /// Whether the board's last answer for wants, and for ads, was read.
     pub board_ok: bool,
     pub ads_ok: bool,
@@ -89,6 +99,11 @@ impl State {
             swaps_ok: false,
             wants: Vec::new(),
             ads: Vec::new(),
+            other_wants: 0,
+            other_ads: 0,
+            all_wants: Vec::new(),
+            all_ads: Vec::new(),
+            pair: (None, None),
             board_ok: false,
             ads_ok: false,
             ads_seen: false,
@@ -104,31 +119,54 @@ impl State {
         self.wants.retain(|w| w.until == 0 || w.until > now);
     }
 
+    /// Draws `wants` and `ads` again from what the board listed, keeping the pair this provider serves. Until the
+    /// provider has said what that is, nothing can be told apart and everything is kept.
+    fn sift(&mut self) {
+        let (btc, evm) = self.pair;
+        let now = self.now;
+        // amount 0 is how a bridger takes a want down; one past its time is no longer waiting
+        let live = |w: &&Want| w.amount > 0 && (w.until == 0 || now == 0 || w.until > now);
+        let mut wants: Vec<Want> = self.all_wants.iter().filter(live).filter(|w| btc.is_none() || w.btc_asset == btc).copied().collect();
+        wants.sort_by_key(|w| std::cmp::Reverse(w.amount));
+        self.other_wants = self.all_wants.iter().filter(live).count() - wants.len();
+        self.wants = wants;
+
+        let mut ads: Vec<Ad> =
+            self.all_ads.iter().filter(|a| (btc.is_none() || a.terms.btc_asset == btc) && (evm.is_none() || a.terms.evm_asset == evm)).cloned().collect();
+        ads.sort_by_key(|a| effective_bps(100 * UNIT, a.terms.fee_bps, a.terms.flat));
+        self.other_ads = self.all_ads.len() - ads.len();
+        self.ads = ads;
+    }
+
     /// A failed read (`None`) keeps the last value on screen and marks its source as not answering.
     pub fn apply(&mut self, ev: Event) {
         match ev {
             Event::Log(entry) => self.log_entry(entry),
-            Event::Terms(t) => self.terms = t,
+            Event::Terms(t) => {
+                let pair = t.as_ref().map(|t| (t.btc_asset, t.evm_asset));
+                self.terms = t;
+                if let Some(pair) = pair.filter(|p| *p != self.pair) {
+                    self.pair = pair;
+                    self.sift();
+                }
+            }
             Event::Health(h) => {
                 self.healthy = h.as_ref().map(|h| h.ok);
                 self.health_error = h.map(|h| h.error).unwrap_or_default();
             }
             Event::Wants(w) => {
                 self.board_ok = w.is_some();
-                if let Some(mut w) = w {
-                    // amount 0 is how a bridger takes a want down; one past its time is no longer waiting
-                    let now = self.now;
-                    w.retain(|w| w.amount > 0 && (w.until == 0 || now == 0 || w.until > now));
-                    w.sort_by_key(|w| std::cmp::Reverse(w.amount));
-                    self.wants = w;
+                if let Some(w) = w {
+                    self.all_wants = w;
+                    self.sift();
                 }
             }
             Event::Ads(a) => {
                 self.ads_ok = a.is_some();
                 self.ads_seen |= a.is_some();
-                if let Some(mut a) = a {
-                    a.sort_by_key(|a| effective_bps(100 * UNIT, a.terms.fee_bps, a.terms.flat));
-                    self.ads = a;
+                if let Some(a) = a {
+                    self.all_ads = a;
+                    self.sift();
                 }
             }
             Event::Swaps(s) => {
@@ -303,7 +341,7 @@ mod tests {
     #[test]
     fn a_failed_read_keeps_the_last_value_and_marks_the_source() {
         let mut st = state();
-        st.apply(Event::Wants(Some(vec![Want { amount: 5, max_fee_bps: None, until: 0 }])));
+        st.apply(Event::Wants(Some(vec![Want { btc_asset: None, amount: 5, max_fee_bps: None, until: 0 }])));
 
         st.apply(Event::Wants(None));
 
@@ -325,7 +363,7 @@ mod tests {
     fn a_second_ad_under_the_same_key_does_not_take_the_name() {
         let mut st = state();
         st.id.claim_pub = "02me".into();
-        let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None };
+        let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None, ..Default::default() };
         let ad = |name: &str, terms: Terms| Ad { name: name.into(), claim_pub: "02me".into(), terms, any_tac: false, reverse: false };
         st.apply(Event::Ads(Some(vec![ad("impostor", Terms { fee_bps: 1, ..own.clone() }), ad("dx-lp", own.clone())])));
         let before_terms = (st.ad_contested(), st.name());
@@ -339,7 +377,7 @@ mod tests {
     fn a_lone_ad_under_the_key_with_other_terms_is_not_this_provider() {
         let mut st = state();
         st.id.claim_pub = "02me".into();
-        let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None };
+        let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None, ..Default::default() };
         let forged = Ad { name: "impostor".into(), claim_pub: "02me".into(), terms: Terms { fee_bps: 1, ..own.clone() }, any_tac: false, reverse: false };
         st.apply(Event::Terms(Some(own)));
 
@@ -373,7 +411,7 @@ mod tests {
     #[test]
     fn a_want_stops_waiting_when_its_time_passes_without_a_new_answer() {
         let mut st = state();
-        st.apply(Event::Wants(Some(vec![Want { amount: 5, max_fee_bps: None, until: 1_000 }])));
+        st.apply(Event::Wants(Some(vec![Want { btc_asset: None, amount: 5, max_fee_bps: None, until: 1_000 }])));
         st.apply(Event::Wants(None));
 
         st.tick(1_001);
@@ -401,7 +439,7 @@ mod tests {
     fn wants_past_their_time_are_not_counted_as_waiting() {
         let mut st = state();
         st.now = 1_000;
-        let want = |until| Want { amount: 5, max_fee_bps: None, until };
+        let want = |until| Want { btc_asset: None, amount: 5, max_fee_bps: None, until };
 
         st.apply(Event::Wants(Some(vec![want(999), want(1_001), want(0)])));
 
@@ -422,7 +460,7 @@ mod tests {
     fn advice_measures_against_other_providers_that_can_lend_and_not_against_itself() {
         let mut st = state();
         st.id.claim_pub = "02me".into();
-        let own = Terms { min: 10 * UNIT, max: 500 * UNIT, fee_bps: 150, flat: 0, available: Some(UNIT) };
+        let own = Terms { min: 10 * UNIT, max: 500 * UNIT, fee_bps: 150, flat: 0, available: Some(UNIT), ..Default::default() };
         let ad = |key: &str, bps: u64, available: u128| Ad {
             name: key.into(),
             claim_pub: key.into(),
@@ -439,6 +477,37 @@ mod tests {
         let a = st.advice().expect("advice");
         assert_eq!(before_any_ads, Some(advisor::Standing::Unknown));
         assert_eq!((a.standing, a.cheapest_name.as_deref()), (advisor::Standing::Cheapest { next: 200 }, Some("03other")));
+    }
+
+    #[test]
+    fn only_the_pair_this_provider_serves_is_the_market() {
+        let mut st = state();
+        let (tac_asset, sats, eth) = (Some(Asset([1; 32])), Some(Asset([0; 32])), Some(Asset([2; 32])));
+        let terms = |btc, evm| Terms { btc_asset: btc, evm_asset: evm, min: 1, max: 9, ..Default::default() };
+        let ad = |name: &str, btc, evm| Ad { name: name.into(), claim_pub: name.into(), terms: terms(btc, evm), any_tac: false, reverse: false };
+        let want = |btc| Want { btc_asset: btc, amount: 5, max_fee_bps: None, until: 0 };
+        st.apply(Event::Ads(Some(vec![ad("tac", tac_asset, tac_asset), ad("sats for eth", sats, eth), ad("says nothing", None, None)])));
+        st.apply(Event::Wants(Some(vec![want(tac_asset), want(sats), want(None)])));
+        let before_the_pair_is_known = (st.ads.len(), st.wants.len());
+
+        st.apply(Event::Terms(Some(terms(tac_asset, tac_asset))));
+
+        assert_eq!(before_the_pair_is_known, (3, 3));
+        assert_eq!((st.ads.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), st.other_ads), (vec!["tac"], 2));
+        assert_eq!((st.wants.len(), st.other_wants), (1, 2));
+    }
+
+    #[test]
+    fn the_pair_is_remembered_when_the_provider_stops_answering() {
+        let mut st = state();
+        let (tac_asset, sats) = (Some(Asset([1; 32])), Some(Asset([0; 32])));
+        let want = |btc| Want { btc_asset: btc, amount: 5, max_fee_bps: None, until: 0 };
+        st.apply(Event::Terms(Some(Terms { btc_asset: tac_asset, evm_asset: tac_asset, ..Default::default() })));
+
+        st.apply(Event::Terms(None));
+        st.apply(Event::Wants(Some(vec![want(tac_asset), want(sats)])));
+
+        assert_eq!((st.wants.len(), st.other_wants), (1, 1));
     }
 
     #[test]

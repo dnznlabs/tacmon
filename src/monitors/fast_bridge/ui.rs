@@ -28,6 +28,11 @@ fn level_color(l: Level, th: &Theme) -> Color {
     }
 }
 
+/// What the board lists for pairs this provider does not serve: counted in a title, never drawn as this market.
+fn others(n: usize) -> String {
+    if n == 0 { String::new() } else { format!(" · {n} for other assets not shown") }
+}
+
 fn right(s: String) -> Cell<'static> {
     Cell::from(Line::from(s).right_aligned())
 }
@@ -265,7 +270,7 @@ fn demand(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let total = total(st.wants.iter().map(|w| w.amount));
     let takeable = st.wants.iter().filter(|w| st.blocker(w) == Some(None)).count();
     let title = if st.board_ok {
-        format!(" Bridgers waiting · {} · {} TAC · {takeable} you can take ", st.wants.len(), tac(total))
+        format!(" Bridgers waiting · {} · {} TAC · {takeable} you can take{} ", st.wants.len(), tac(total), others(st.other_wants))
     } else {
         " Bridgers waiting · the board does not answer ".to_string()
     };
@@ -301,7 +306,7 @@ fn market(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         })
         .collect();
     let title = if st.ads_ok {
-        format!(" Providers on the board · {} · cheapest first at 100 TAC ", st.ads.len())
+        format!(" Providers on the board · {} · cheapest first at 100 TAC{} ", st.ads.len(), others(st.other_ads))
     } else {
         format!(" Providers on the board · {} · THE BOARD DOES NOT ANSWER: last known ", st.ads.len())
     };

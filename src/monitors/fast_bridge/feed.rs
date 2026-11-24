@@ -132,7 +132,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_port_is_read_and_the_pool_account_is_learned_from_the_log() {
-        let data = Memory { eth: 0.5, wants: vec![Want { amount: 7, max_fee_bps: None, until: 0 }], ..Default::default() };
+        let data = Memory { eth: 0.5, wants: vec![Want { btc_asset: None, amount: 7, max_fee_bps: None, until: 0 }], ..Default::default() };
         let started = LogEntry {
             signal: Some(Signal::Started(Identity { pool_account: "0xpool".into(), ..Default::default() })),
             ..LogEntry::plain(Level::Info, "fast bridge LP")

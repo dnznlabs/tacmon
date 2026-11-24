@@ -73,7 +73,7 @@ pub fn create_memory_ports(data: Memory, log: Vec<LogEntry>) -> Ports {
 /// A made-up provider mid-shift, for `--demo`. Every key, address and transaction id is invented.
 pub fn create_demo_ports(now: u64) -> Ports {
     let t = |v: u128| v * UNIT;
-    let terms = Terms { min: t(10), max: t(1000), fee_bps: 100, flat: UNIT / 10, available: Some(t(1840)) };
+    let terms = Terms { min: t(10), max: t(1000), fee_bps: 100, flat: UNIT / 10, available: Some(t(1840)), ..Default::default() };
     let me = "02a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
     let swap = |id: &str, phase: &str, age: u64, gets: u128| Swap {
         id: format!("{id}{}", "0".repeat(56)),
@@ -87,19 +87,19 @@ pub fn create_demo_ports(now: u64) -> Ports {
     let ad = |name: &str, key: &str, bps: u64, max: u128, avail: u128, any_tac: bool| Ad {
         name: name.into(),
         claim_pub: key.into(),
-        terms: Terms { min: t(10), max: t(max), fee_bps: bps, flat: UNIT / 10, available: Some(t(avail)) },
+        terms: Terms { min: t(10), max: t(max), fee_bps: bps, flat: UNIT / 10, available: Some(t(avail)), ..Default::default() },
         any_tac,
         reverse: false,
     };
     let data = Memory {
         health: Health { ok: true, error: String::new() },
         wants: vec![
-            Want { amount: t(3400), max_fee_bps: None, until: now + 30_000 },
-            Want { amount: t(2000), max_fee_bps: Some(200), until: now + 80_000 },
-            Want { amount: t(1000), max_fee_bps: Some(50), until: now + 52_000 },
-            Want { amount: t(620), max_fee_bps: Some(100), until: now + 24_000 },
-            Want { amount: t(180), max_fee_bps: None, until: now + 70_000 },
-            Want { amount: t(60), max_fee_bps: None, until: now + 15_000 },
+            Want { btc_asset: None, amount: t(3400), max_fee_bps: None, until: now + 30_000 },
+            Want { btc_asset: None, amount: t(2000), max_fee_bps: Some(200), until: now + 80_000 },
+            Want { btc_asset: None, amount: t(1000), max_fee_bps: Some(50), until: now + 52_000 },
+            Want { btc_asset: None, amount: t(620), max_fee_bps: Some(100), until: now + 24_000 },
+            Want { btc_asset: None, amount: t(180), max_fee_bps: None, until: now + 70_000 },
+            Want { btc_asset: None, amount: t(60), max_fee_bps: None, until: now + 15_000 },
         ],
         ads: vec![ad("demo-lp", me, 100, 1000, 1840, true), ad("harbor", "03aa", 30, 300, 0, false), ad("north", "03bb", 150, 5000, 420, true)],
         swaps: vec![

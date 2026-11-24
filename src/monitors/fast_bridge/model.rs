@@ -86,8 +86,16 @@ pub struct Capacity {
     pub holds: u64,
 }
 
+/// What is bridged, as the protocol names it: 32 bytes. The board carries every pair any provider serves, so an
+/// amount means nothing until its asset is known to be the one being watched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Asset(pub [u8; 32]);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Terms {
+    /// The asset taken on Bitcoin and the one paid in the pool. `None` where the answer does not say.
+    pub btc_asset: Option<Asset>,
+    pub evm_asset: Option<Asset>,
     pub min: u128,
     pub max: u128,
     pub fee_bps: u64,
@@ -130,6 +138,8 @@ impl Swap {
 /// A bridge no provider online could take when it was posted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Want {
+    /// The asset the bridger holds on Bitcoin.
+    pub btc_asset: Option<Asset>,
     pub amount: u128,
     pub max_fee_bps: Option<u64>,
     pub until: u64,

@@ -3,7 +3,7 @@
 
 use crate::{
     fmt::short,
-    monitors::fast_bridge::model::{Ad, Capacity, Health, Identity, Level, LogEntry, Signal, Swap, Terms, Want, tac},
+    monitors::fast_bridge::model::{Ad, Asset, Capacity, Health, Identity, Level, LogEntry, Signal, Swap, Terms, Want, tac},
 };
 use serde_json::Value;
 
@@ -25,6 +25,20 @@ fn small(v: &Value, key: &str) -> u64 {
     u64::try_from(field(v, key)).unwrap_or(u64::MAX)
 }
 
+/// An asset id: 64 hex digits, with or without "0x". The provider writes it both ways.
+fn asset(v: &Value, key: &str) -> Option<Asset> {
+    let hex = v.get(key)?.as_str()?;
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    if hex.len() != 64 || !hex.is_ascii() {
+        return None;
+    }
+    let mut id = [0u8; 32];
+    for (i, byte) in id.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(Asset(id))
+}
+
 fn text(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
@@ -33,6 +47,8 @@ fn text(v: &Value, key: &str) -> String {
 /// terms of all zeros would be drawn as real ones.
 pub fn terms(v: &Value) -> Option<Terms> {
     Some(Terms {
+        btc_asset: asset(v, "btcAsset"),
+        evm_asset: asset(v, "evmAsset"),
         min: v.get("minAmount").and_then(units)?,
         max: v.get("maxAmount").and_then(units)?,
         fee_bps: u64::try_from(v.get("feeBps").and_then(units)?).unwrap_or(u64::MAX),
@@ -66,7 +82,7 @@ pub fn want(v: &Value) -> Want {
         None | Some(Value::Null) => None,
         Some(cap) => Some(units(cap).map_or(0, |c| u64::try_from(c).unwrap_or(u64::MAX))),
     };
-    Want { amount: field(v, "amount"), max_fee_bps, until: small(v, "until") }
+    Want { btc_asset: asset(v, "btcAsset"), amount: field(v, "amount"), max_fee_bps, until: small(v, "until") }
 }
 
 /// `None` for an ad without readable terms: it is left out of the market, not listed at a fee of zero.
@@ -246,6 +262,18 @@ mod tests {
         let read = answers.each_ref().map(terms);
 
         assert_eq!(read, [None, None, None]);
+    }
+
+    #[test]
+    fn an_asset_reads_the_same_with_or_without_its_prefix() {
+        let id = "f0bbe868af10c6c67652a99709bf32048d1aa7194efe3e9a1ef1bde43f94762b";
+        let v = json!({ "bare": id, "prefixed": format!("0x{id}"), "upper": id.to_uppercase(), "short": "f0bb", "number": 7 });
+
+        let read = ["bare", "prefixed", "upper", "short", "number", "missing"].map(|k| asset(&v, k));
+
+        assert!(read[0].is_some_and(|a| a.0[0] == 0xf0 && a.0[31] == 0x2b));
+        assert_eq!((read[1], read[2]), (read[0], read[0]));
+        assert_eq!(read[3..], [None, None, None]);
     }
 
     #[test]

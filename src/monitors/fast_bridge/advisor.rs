@@ -134,10 +134,10 @@ mod tests {
     use crate::monitors::fast_bridge::model::UNIT;
 
     fn terms() -> Terms {
-        Terms { min: 10 * UNIT, max: 500 * UNIT, fee_bps: 150, flat: UNIT / 10, available: None }
+        Terms { min: 10 * UNIT, max: 500 * UNIT, fee_bps: 150, flat: UNIT / 10, available: None, ..Default::default() }
     }
     fn want(tac: u128, cap: Option<u64>) -> Want {
-        Want { amount: tac * UNIT, max_fee_bps: cap, until: 0 }
+        Want { btc_asset: None, amount: tac * UNIT, max_fee_bps: cap, until: 0 }
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn a_bridge_smaller_than_its_fee_earns_nothing() {
         let t = Terms { min: 0, ..terms() };
-        let dust = [Want { amount: 1, max_fee_bps: None, until: 0 }; 3];
+        let dust = [Want { btc_asset: None, amount: 1, max_fee_bps: None, until: 0 }; 3];
 
         let a = advise(&t, &dust, &[], Some(&[]));
 
@@ -240,6 +240,7 @@ mod tests {
             fee_bps: 0,
             flat: 0,
             available: available.map(|a| a * UNIT),
+            ..Default::default()
         };
 
         let rivals = [

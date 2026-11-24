@@ -71,6 +71,7 @@ For anyone changing this repo, human or agent.
 - **Wire formats stay in `adapters/wire.rs`.** The provider's log messages and record fields are not a stable interface: read them leniently, and show what is not recognised as it is.
 - **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering. A failed status, or an answer missing what it must carry, is a failed read.
 - **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee.
+- **The board carries every pair.** An ad or a want is this provider's market only when its asset is the one `/info` names; `State::sift` keeps those and counts the rest.
 - **Amounts from outside never wrap or truncate.** Sum with `model::total`, multiply through `model::fee_on`, narrow with `try_from`.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.
