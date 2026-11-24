@@ -6,7 +6,7 @@
 
 ## Overview
 
-`tacmon` is a terminal activity monitor for Tacit services, in the spirit of `htop` and `k9s`. Two levels: a
+`tacmon` is a terminal activity monitor for operators of Tacit services, in the spirit of `htop` and `k9s`: it watches what the operator runs, on the machine it runs on, and is not a view of the network. Two levels: a
 **monitor** per kind of service, then that monitor's **pages**. One monitor exists, `fast-bridge`, for a fast bridge
 liquidity provider. Every monitor is read only: it never sees a service's key and never changes a service.
 
