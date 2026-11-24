@@ -1,0 +1,43 @@
+[theme]
+accent = "cyan"
+good = "green"
+warn = "yellow"
+bad = "red"
+dim = "242"
+
+[fast_bridge]
+enabled = true
+lp_url = "http://127.0.0.1:8787"
+boards = ["https://tacit-fast-board.onrender.com"]
+data_dir = "/var/lib/tacit-fastbridge-lp"
+log_cmd = [
+    "journalctl",
+    "-u",
+    "tacit-fastbridge-lp",
+    "-o",
+    "cat",
+    "-f",
+    "-n",
+    "2000",
+]
+eth_rpc = ""
+pool_account = ""
+
+[fast_bridge.refresh]
+lp_secs = 5
+board_secs = 20
+files_secs = 5
+eth_secs = 60
+
+[fast_bridge.advisor]
+fee_ladder_bps = [
+    10,
+    30,
+    50,
+    100,
+    150,
+    200,
+    300,
+    500,
+]
+deadline_warn_secs = 3600

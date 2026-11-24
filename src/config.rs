@@ -1,0 +1,49 @@
+//! Configuration: a TOML file, every field optional. The shell owns the theme; each monitor owns a section.
+
+use crate::monitors::fast_bridge::FastBridgeConfig;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    pub theme: ThemeConfig,
+    pub fast_bridge: FastBridgeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeConfig {
+    /// Any ratatui colour: a name ("cyan", "lightmagenta"), "#rrggbb", or a 256-colour index ("242").
+    pub accent: String,
+    pub good: String,
+    pub warn: String,
+    pub bad: String,
+    pub dim: String,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self { accent: "cyan".into(), good: "green".into(), warn: "yellow".into(), bad: "red".into(), dim: "242".into() }
+    }
+}
+
+impl Config {
+    /// `$XDG_CONFIG_HOME/tacmon/config.toml`, or `~/.config/...`.
+    pub fn default_path() -> Option<PathBuf> {
+        let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+        Some(base.join("tacmon").join("config.toml"))
+    }
+
+    /// An explicit path must exist; the default path is used only when it does.
+    pub fn load(explicit: Option<&Path>) -> Result<Self> {
+        let path = match explicit {
+            Some(p) => Some(p.to_path_buf()),
+            None => Self::default_path().filter(|p| p.exists()),
+        };
+        let Some(path) = path else { return Ok(Self::default()) };
+        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+}

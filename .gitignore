@@ -1,0 +1,8 @@
+.planning
+.envrc.local
+.claude/settings.local.json
+.devbox/
+
+# Project ignores below.
+
+/target

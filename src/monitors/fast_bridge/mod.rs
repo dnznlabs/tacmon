@@ -1,0 +1,85 @@
+//! The fast bridge monitor: one liquidity provider, watched through its log, its API, its swap records and the board.
+//! Read only. It never sees the provider's key and sends the provider nothing but GETs.
+
+pub mod adapters;
+mod advisor;
+mod config;
+mod feed;
+mod model;
+mod ports;
+mod state;
+mod ui;
+
+pub use config::FastBridgeConfig;
+
+use crate::{
+    fmt::now,
+    shell::{
+        monitor::{Monitor, Wake},
+        theme::Theme,
+    },
+};
+use feed::Event;
+use ports::Ports;
+use ratatui::{Frame, crossterm::event::KeyEvent, layout::Rect};
+use state::{Page, State};
+use tokio::sync::mpsc::UnboundedReceiver;
+
+pub struct FastBridge {
+    cfg: FastBridgeConfig,
+    state: State,
+    /// Held until `start` hands them to the feed.
+    ports: Option<Ports>,
+    events: Option<UnboundedReceiver<Event>>,
+}
+
+pub fn create_fast_bridge(cfg: &FastBridgeConfig, demo: bool) -> FastBridge {
+    let ports = if demo { adapters::memory::create_demo_ports(now()) } else { adapters::create_ports(cfg) };
+    FastBridge { cfg: cfg.clone(), state: State::new(cfg, ports.gas.is_some()), ports: Some(ports), events: None }
+}
+
+impl Monitor for FastBridge {
+    fn id(&self) -> &'static str {
+        "fast-bridge"
+    }
+    fn title(&self) -> &'static str {
+        "Fast bridge"
+    }
+    fn subject(&self) -> String {
+        self.state.name()
+    }
+    fn pages(&self) -> &'static [&'static str] {
+        &Page::TITLES
+    }
+    fn start(&mut self, wake: Wake) {
+        if let Some(ports) = self.ports.take() {
+            self.events = Some(feed::start(ports, &self.cfg.refresh, self.cfg.pool_account.clone(), wake));
+        }
+    }
+    fn refresh(&mut self, now: u64) {
+        self.state.now = now;
+        if let Some(rx) = &mut self.events {
+            while let Ok(ev) = rx.try_recv() {
+                self.state.apply(ev);
+            }
+        }
+    }
+    fn on_key(&mut self, page: usize, key: KeyEvent) {
+        self.state.on_key(Page::ALL[page], key);
+    }
+    fn header_height(&self) -> u16 {
+        ui::HEADER_LINES
+    }
+    fn draw_header(&self, f: &mut Frame, area: Rect, th: &Theme) {
+        ui::header(f, area, &self.state, th);
+    }
+    fn draw_page(&self, f: &mut Frame, area: Rect, page: usize, th: &Theme) {
+        ui::page(f, area, Page::ALL[page], &self.state, th);
+    }
+    fn hints(&self, page: usize) -> &'static str {
+        match Page::ALL[page] {
+            Page::Activity => "↑↓ scroll · g newest · w warnings only",
+            _ => "↑↓ scroll",
+        }
+    }
+}
