@@ -98,7 +98,7 @@ A change is not done until the documents describing what it changed are updated 
 - Contributors work on a branch and open a pull request. CI (`.github/workflows/ci.yml`) runs `make lint`, `make test` and a locked release build on every pull request; all three must pass.
 - **Hooks check and report; they never rewrite files.** `scripts/pre-commit.sh` runs `cargo fmt --check` and clippy. Run `make fmt` yourself.
 - **Nothing private in a tracked file:** no keys, tokens, RPC URLs with credentials, or personal details. A hook scans each commit for secrets.
-- **A plain clone must work.** A tracked file may reach for `../shared`, but a missing checkout is a no-op, never a failure. `make init` is the one exception.
+- **A plain clone must work.** A tracked file may reach for `../shared`, but a missing checkout is a no-op, never a failure. Without it `make init` installs the devbox packages and the git hooks itself.
 
 ## Gotchas
 
