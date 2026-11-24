@@ -6,6 +6,8 @@ by **Ðenizen.** // dxnzn.wei
 
 `tacmon` watches the services you run for [Tacit](https://tacit.finance), in the spirit of `htop` and `k9s`. It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there is one monitor, `fast-bridge`, for a fast bridge liquidity provider. It is read only: it never sees a service's key and never changes a service.
 
+![tacmon running on its demo data: the start screen, then each page of the fast bridge monitor](docs/demo/demo.gif)
+
 ## Release Info
 
 ### Project Status
@@ -72,6 +74,7 @@ make test           # Run the tests
 make lint           # Check formatting and run clippy, as the pre-commit hook does
 make run            # Run tacmon against the services on this machine
 make demo           # Run tacmon on made-up data
+make demo-video     # Record docs/demo/ (GIF and MP4) from the demo
 make help           # List every command
 ```
 

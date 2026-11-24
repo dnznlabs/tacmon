@@ -33,6 +33,7 @@ liquidity provider. Every monitor is read only: it never sees a service's key an
 ## Commands
 
 - `make build`, `make test`, `make fmt`, `make lint`, `make run`, `make demo`
+- `make demo-video` records `docs/demo/demo.gif` and `demo.mp4`: `scripts/record-demo.py` drives `tacmon --demo` in a pseudo-terminal, `agg` renders the GIF and `ffmpeg` converts it. Re-record after a change to a page or the start screen.
 - `target/release/tacmon --snapshot [monitor/]<page>` draws one page to stdout as plain text: the way to check a page without a terminal. Add `--demo` for fixed data. `--snapshot splash` prints the start screen.
 - `tacmon --print-config > config.example.toml` after changing a default.
 
@@ -53,4 +54,5 @@ liquidity provider. Every monitor is read only: it never sees a service's key an
 - `Monitor::start` and `LogFeed::start` spawn tasks, so they must be called inside the tokio runtime.
 - The provider's log is read through `journalctl` by default; the swap records need read access to the provider's `dataDir`.
 - `--snapshot` output has no colour, so a colour-only change cannot be checked with it.
+- `agg` needs a font with braille glyphs or the start screen records blank: pass one in `AGG_FLAGS` (DejaVu Sans Mono has none; DejaVu Sans as a fallback does).
 - `config.example.toml` is generated: edit the defaults in the `config.rs` files, not the file.

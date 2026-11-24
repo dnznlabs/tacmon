@@ -6,3 +6,6 @@
 # Project ignores below.
 
 /target
+
+# The recording `make demo-video` converts; the GIF is what is kept.
+docs/demo/demo.cast
