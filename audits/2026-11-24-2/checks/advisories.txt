@@ -1,0 +1,2 @@
+Info: Running script "cargo-deny" on /mnt/bigdata/machines/tacit-services/src/tacmon
+advisories ok
