@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# Runs a fast bridge provider's upkeep tools (tacit's tools/lp-run.sh) with the provider's key: the commands tacmon's
+# Maintenance page prints. tacmon never sees the key. This script reads it, and hands it to the tool's environment only.
+#
+#   scripts/helpers/fast-bridge status                          the reverse address and what is at it (reads only)
+#   scripts/helpers/fast-bridge fund --tac N --note … --coin … --mode plain
+#   scripts/helpers/fast-bridge topup --coin <txid:vout>
+#   scripts/helpers/fast-bridge normalize --txid <id>
+#   scripts/helpers/fast-bridge bump --txid <id>
+#
+# Every tool that sends is a dry run until it is run again with `--send --confirm <the token it printed>`.
+#
+#   TACIT_DIR   the tacit checkout (default: ../tacit beside this repo)
+#   FB_LP_ENV   the provider's environment file holding FB_LP_KEY (default: /etc/tacit-fastbridge-lp/env), read with
+#               sudo when this user cannot read it (sudo -n with no terminal, so tacmon's status_cmd never hangs on a prompt)
+#   FB_LP_KEY   used as it is when already set: the file is then not read
+#
+set -euo pipefail
+
+die() { echo "fast-bridge: $*" >&2; exit 1; }
+
+case "${1:-}" in
+  status | fund | topup | normalize | bump) ;;
+  *) sed -n '6,11p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac
+
+here=$(cd "$(dirname "$0")" && pwd -P)
+# the real path, not one through a symlink: the tools only run when the path they were started by is their own
+tacit=$(cd "${TACIT_DIR:-$here/../../../tacit}" 2>/dev/null && pwd -P) || die "no tacit checkout at ${TACIT_DIR:-../tacit} (set TACIT_DIR)"
+[ -x "$tacit/tools/lp-run.sh" ] || die "$tacit has no tools/lp-run.sh: is it the tacit repository, and up to date?"
+
+if [ -z "${FB_LP_KEY:-}" ]; then
+  env_file=${FB_LP_ENV:-/etc/tacit-fastbridge-lp/env}
+  if [ -r "$env_file" ]; then
+    line=$(grep -m1 '^FB_LP_KEY=' "$env_file") || die "no FB_LP_KEY in $env_file"
+  else
+    # with no terminal to ask on (tacmon's status_cmd), sudo must fail rather than wait for a password
+    sudo_flags=()
+    [ -t 0 ] || sudo_flags=(-n)
+    line=$(sudo "${sudo_flags[@]}" grep -m1 '^FB_LP_KEY=' "$env_file") || die "no FB_LP_KEY in $env_file, or sudo was refused"
+  fi
+  key=${line#FB_LP_KEY=}
+  key=${key//\"/}
+  key=${key//\'/}
+  # never echoed: a wrong value is described, not shown
+  [[ $key =~ ^(0x)?[0-9a-fA-F]{64}$ ]] || die "FB_LP_KEY in $env_file is not 64 hex digits"
+  export FB_LP_KEY=$key
+  unset line key
+fi
+
+cd "$tacit"
+exec "$tacit/tools/lp-run.sh" "$@"

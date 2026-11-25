@@ -5,7 +5,7 @@ import fcntl, json, os, pty, select, struct, sys, termios, time
 
 COLS, ROWS = 150, 38
 # (seconds to wait, keys to press): the start screen plays for about 3.4 s before the first page
-SCRIPT = [(7.5, "2"), (3.0, "w"), (2.0, "w"), (1.2, "3"), (3.5, "4"), (3.5, "5"), (4.5, "1"), (2.5, "q")]
+SCRIPT = [(7.5, "2"), (3.0, "w"), (2.0, "w"), (1.2, "3"), (3.5, "4"), (3.5, "5"), (5.0, "6"), (4.5, "1"), (2.5, "q")]
 
 def main(binary, out):
     pid, fd = pty.fork()

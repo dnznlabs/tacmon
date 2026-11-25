@@ -3,7 +3,7 @@
 
 use super::{
     config::Refresh,
-    model::{Ad, Health, LogEntry, Signal, Swap, Terms, Want},
+    model::{Ad, Coin, Health, LogEntry, ReverseSide, ReverseStock, Signal, Swap, Terms, Want},
     ports::{Ports, QUEUE},
 };
 use crate::shell::monitor::Wake;
@@ -21,10 +21,16 @@ pub enum Event {
     Log(LogEntry),
     Terms(Option<Terms>),
     Health(Option<Health>),
+    Reverse(Option<ReverseSide>),
     Wants(Option<Vec<Want>>),
     Ads(Option<Vec<Ad>>),
     Swaps(Option<Vec<Swap>>),
     Eth(Option<f64>),
+    /// What is unspent at the provider's main address, and at its reverse address.
+    MainCoins(Option<Vec<Coin>>),
+    ReverseCoins(Option<Vec<Coin>>),
+    /// What is at the reverse address, read by the configured status command.
+    Stock(Option<ReverseStock>),
 }
 
 #[derive(Clone)]
@@ -44,35 +50,45 @@ impl Out {
     }
 }
 
-/// `pool_account` empty means: learn it from the log's start line. Must be called inside the runtime.
-pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) -> Receiver<Event> {
+/// `pool_account` empty means: learn it from the log's start line. `reverse_address` is the configured one, until the
+/// log names the address the side actually sells from. Must be called inside the runtime.
+pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_address: String, wake: Wake) -> Receiver<Event> {
     let (tx, rx) = channel(QUEUE);
     let out = Out { tx, wake };
-    let Ports { provider, board, swaps, gas, log } = ports;
+    let Ports { provider, board, swaps, gas, chain, inventory, log } = ports;
     let learn = pool_account.is_empty();
     let (pool_tx, mut pool_rx) = watch::channel(pool_account);
+    // the main address and the reverse one, as far as they are known
+    let (addr_tx, mut addr_rx) = watch::channel((String::new(), reverse_address));
 
     let o = out.clone();
     tokio::spawn(async move {
         let mut entries = log.start();
         while let Some(entry) = entries.recv().await {
-            if learn && let Some(Signal::Started(id)) = &entry.signal {
-                let _ = pool_tx.send(id.pool_account.clone());
+            match &entry.signal {
+                Some(Signal::Started(id)) => {
+                    if learn {
+                        let _ = pool_tx.send(id.pool_account.clone());
+                    }
+                    addr_tx.send_modify(|a| a.0.clone_from(&id.bitcoin_address));
+                }
+                Some(Signal::ReverseOn(address)) => addr_tx.send_modify(|a| a.1.clone_from(address)),
+                _ => {}
             }
             if !o.send(Event::Log(entry)).await {
                 return;
             }
         }
-        // the log has ended, but the gas task still needs the account it learned from it
+        // the log has ended, but the gas and chain tasks still need what it learned from it
         o.tx.closed().await;
-        drop(pool_tx);
+        drop((pool_tx, addr_tx));
     });
 
     let (o, every) = (out.clone(), Duration::from_secs(refresh.lp_secs.max(1)));
     tokio::spawn(async move {
         loop {
-            let (terms, health) = tokio::join!(provider.terms(), provider.health());
-            if !o.send(Event::Terms(terms.ok())).await || !o.send(Event::Health(health.ok())).await {
+            let (terms, health, reverse) = tokio::join!(provider.terms(), provider.health(), provider.reverse());
+            if !o.send(Event::Terms(terms.ok())).await || !o.send(Event::Health(health.ok())).await || !o.send(Event::Reverse(reverse.ok())).await {
                 return;
             }
             sleep(every).await;
@@ -100,6 +116,41 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
             sleep(every).await;
         }
     });
+
+    if let Some(chain) = chain {
+        // not under 30 s: a public explorer, asked about addresses that change a few times an hour
+        let (o, every) = (out.clone(), Duration::from_secs(refresh.chain_secs.max(30)));
+        tokio::spawn(async move {
+            loop {
+                let (main, reverse) = addr_rx.borrow_and_update().clone();
+                if main.is_empty() && reverse.is_empty() {
+                    if addr_rx.changed().await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                let (m, r) = tokio::join!(chain.unspent(&main), chain.unspent(&reverse));
+                if (!main.is_empty() && !o.send(Event::MainCoins(m.ok())).await) || (!reverse.is_empty() && !o.send(Event::ReverseCoins(r.ok())).await) {
+                    return;
+                }
+                // an address learned meanwhile is read at once, not a whole interval later
+                let _ = tokio::time::timeout(every, addr_rx.changed()).await;
+            }
+        });
+    }
+
+    if let Some(inventory) = inventory {
+        // not under a minute: each run scans the pool, and holds the key while it does
+        let (o, every) = (out.clone(), Duration::from_secs(refresh.status_secs.max(60)));
+        tokio::spawn(async move {
+            loop {
+                if !o.send(Event::Stock(inventory.reverse_stock().await.ok())).await {
+                    return;
+                }
+                sleep(every).await;
+            }
+        });
+    }
 
     if let Some(gas) = gas {
         let (o, every) = (out, Duration::from_secs(refresh.eth_secs.max(10)));
@@ -131,27 +182,50 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn every_port_is_read_and_the_pool_account_is_learned_from_the_log() {
-        let data = Memory { eth: 0.5, wants: vec![Want { btc_asset: None, amount: 7, max_fee_bps: None, until: 0 }], ..Default::default() };
+    async fn every_port_is_read_and_the_addresses_are_learned_from_the_log() {
+        let coin = Coin { txid: "a".repeat(64), vout: 0, sats: 9_000, confirmed: true };
+        let data = Memory {
+            eth: 0.5,
+            wants: vec![Want { btc_asset: None, amount: 7, max_fee_bps: None, until: 0 }],
+            coins: vec![("bc1qmain".into(), vec![coin.clone()]), ("bc1qrev".into(), vec![coin])],
+            ..Default::default()
+        };
         let started = LogEntry {
-            signal: Some(Signal::Started(Identity { pool_account: "0xpool".into(), ..Default::default() })),
+            signal: Some(Signal::Started(Identity { pool_account: "0xpool".into(), bitcoin_address: "bc1qmain".into(), ..Default::default() })),
             ..LogEntry::plain(Level::Info, "fast bridge LP")
         };
+        let reverse_on = LogEntry { signal: Some(Signal::ReverseOn("bc1qrev".into())), ..LogEntry::plain(Level::Info, "the reverse side is on") };
         let (wake_tx, _wake_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut rx = start(create_memory_ports(data, vec![started]), &Refresh::default(), String::new(), Wake::new(wake_tx, Default::default()));
+        let mut rx = start(
+            create_memory_ports(data, vec![started, reverse_on]),
+            &Refresh::default(),
+            String::new(),
+            String::new(),
+            Wake::new(wake_tx, Default::default()),
+        );
         let mut seen = Vec::new();
-        while seen.len() < 7 {
-            seen.push(rx.recv().await.expect("the feed is running"));
+        let wanted = |seen: &[Event]| {
+            let has = |f: fn(&Event) -> bool| seen.iter().any(f);
+            [
+                has(|e| matches!(e, Event::Log(l) if l.msg == "fast bridge LP")),
+                has(|e| matches!(e, Event::Terms(Some(_)))),
+                has(|e| matches!(e, Event::Health(Some(_)))),
+                has(|e| matches!(e, Event::Reverse(Some(ReverseSide::Off)))),
+                has(|e| matches!(e, Event::Wants(Some(w)) if w.len() == 1)),
+                has(|e| matches!(e, Event::Ads(Some(_)))),
+                has(|e| matches!(e, Event::Swaps(Some(_)))),
+                has(|e| matches!(e, Event::Eth(Some(v)) if *v == 0.5)),
+                has(|e| matches!(e, Event::MainCoins(Some(c)) if c.len() == 1)),
+                has(|e| matches!(e, Event::ReverseCoins(Some(c)) if c.len() == 1)),
+                has(|e| matches!(e, Event::Stock(Some(_)))),
+            ]
+        };
+
+        while !wanted(&seen).iter().all(|x| *x) && seen.len() < 50 {
+            seen.push(tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("an event in time").expect("the feed is running"));
         }
 
-        let has = |f: fn(&Event) -> bool| seen.iter().any(f);
-        assert!(has(|e| matches!(e, Event::Log(l) if l.msg == "fast bridge LP")));
-        assert!(has(|e| matches!(e, Event::Terms(Some(_)))));
-        assert!(has(|e| matches!(e, Event::Health(Some(_)))));
-        assert!(has(|e| matches!(e, Event::Wants(Some(w)) if w.len() == 1)));
-        assert!(has(|e| matches!(e, Event::Ads(Some(_)))));
-        assert!(has(|e| matches!(e, Event::Swaps(Some(_)))));
-        assert!(has(|e| matches!(e, Event::Eth(Some(v)) if *v == 0.5)));
+        assert_eq!(wanted(&seen), [true; 11]);
     }
 }

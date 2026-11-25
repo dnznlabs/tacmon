@@ -49,4 +49,8 @@ pub trait Monitor {
     fn draw_page(&self, f: &mut Frame, area: Rect, page: usize, th: &Theme);
     /// The page's own keys, for the footer.
     fn hints(&self, page: usize) -> &'static str;
+    /// Text a key asked to put on the clipboard, taken once. The shell sends it to the terminal's clipboard.
+    fn take_copy(&mut self) -> Option<String> {
+        None
+    }
 }

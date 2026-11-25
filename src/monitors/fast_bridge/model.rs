@@ -2,7 +2,31 @@
 //! Amounts are TAC base units (8 decimal places) unless a name says otherwise.
 
 pub const UNIT: u128 = 100_000_000;
-pub const PHASES: [&str; 6] = ["accepted", "locking", "locked", "offered", "taking", "done"];
+/// Which way a swap goes, as the bridger sees it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Direction {
+    /// TAC on Bitcoin in, pool TAC out.
+    #[default]
+    Forward,
+    /// Pool TAC in, TAC on Bitcoin out, from the reverse side's own address.
+    Reverse,
+}
+
+impl Direction {
+    /// The happy path, in order. Anything else a record says is off it.
+    pub fn phases(self) -> [&'static str; 6] {
+        match self {
+            Direction::Forward => ["accepted", "locking", "locked", "offered", "taking", "done"],
+            Direction::Reverse => ["built", "broadcast", "offered", "claiming", "claimed", "done"],
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Direction::Forward => "BTC→POOL",
+            Direction::Reverse => "POOL→BTC",
+        }
+    }
+}
 
 /// "1,234.56"
 pub fn tac(u: u128) -> String {
@@ -68,6 +92,8 @@ impl LogEntry {
 pub enum Signal {
     Started(Identity),
     Capacity(Capacity),
+    /// The reverse side started, selling from this Bitcoin address.
+    ReverseOn(String),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -110,29 +136,83 @@ pub struct Health {
     pub error: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Swap {
+    pub direction: Direction,
     pub id: String,
     pub phase: String,
     pub created: u64,
+    /// The Ethereum deadline. 0 where the record does not carry one yet.
     pub deadline: u64,
-    /// What the bridger pays on Bitcoin, and what it receives in the pool.
+    /// What the bridger pays and what it receives: TAC on Bitcoin for pool TAC forward, the other way round in reverse.
     pub pays: u128,
     pub gets: u128,
     pub lock_txid: String,
+    /// The provider's take of the bridger's lock: where the TAC it was paid on Bitcoin landed. Empty until taken.
+    pub take_txid: String,
 }
 
 impl Swap {
     pub fn fee(&self) -> u128 {
         self.pays.saturating_sub(self.gets)
     }
-    pub fn done(&self) -> bool {
-        self.phase == "done"
+    /// The provider has been paid. In reverse that is its claim of the pool lock, before the bridger takes the note.
+    pub fn paid(&self) -> bool {
+        match self.direction {
+            Direction::Forward => self.phase == "done",
+            Direction::Reverse => matches!(self.phase.as_str(), "claimed" | "done"),
+        }
     }
     /// Finished one way or another: nothing of it is still at stake.
     pub fn closed(&self) -> bool {
-        matches!(self.phase.as_str(), "done" | "refunded" | "rejected" | "aborted")
+        match self.direction {
+            Direction::Forward => matches!(self.phase.as_str(), "done" | "refunded" | "rejected" | "aborted"),
+            Direction::Reverse => matches!(self.phase.as_str(), "done" | "refunded" | "counter-took" | "aborted"),
+        }
     }
+}
+
+/// The size of the output a Tacit note rides on. Anything larger is plain sats.
+pub const DUST: u64 = 546;
+
+/// An unspent output at a Bitcoin address, as an explorer reports it. `txid` is 64 hex digits: the reader drops anything else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Coin {
+    pub txid: String,
+    pub vout: u32,
+    pub sats: u64,
+    pub confirmed: bool,
+}
+
+impl Coin {
+    pub fn outpoint(&self) -> String {
+        format!("{}:{}", self.txid, self.vout)
+    }
+    /// An output a note may ride on. Whether one does, and for how much TAC, takes the key to tell.
+    pub fn note_sized(&self) -> bool {
+        self.sats <= DUST
+    }
+}
+
+/// The provider's reverse side: pool TAC in, TAC on Bitcoin out, from an address of its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ReverseSide {
+    /// The provider answers, and the side is switched off.
+    #[default]
+    Off,
+    /// `terms.available` is the most pool TAC it can take now, which the TAC at its address bounds.
+    On { terms: Terms, open: Option<u64>, max_open: u64 },
+}
+
+/// What is at the reverse address, as a tool that holds the key reports it: the TAC needs the key to read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReverseStock {
+    pub address: String,
+    /// Confirmed TAC notes the side can sell, and the TAC in them.
+    pub notes: u64,
+    pub tac: u128,
+    /// Confirmed plain sats. `None` when the tool could not read them.
+    pub sats: Option<u64>,
 }
 
 /// A bridge no provider online could take when it was posted.
@@ -152,7 +232,9 @@ pub struct Ad {
     pub claim_pub: String,
     pub terms: Terms,
     pub any_tac: bool,
+    /// The ad has a reverse member, and that member's terms where they can be read.
     pub reverse: bool,
+    pub reverse_terms: Option<Terms>,
 }
 
 #[cfg(test)]

@@ -5,8 +5,9 @@ use super::{
     config::FastBridgeConfig,
     feed::Event,
     model::*,
+    upkeep::{self, Facts, Upkeep},
 };
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
 
 const MAX_LOG: usize = 5000;
@@ -18,11 +19,12 @@ pub enum Page {
     Demand,
     Market,
     Advisor,
+    Maintenance,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [Page::Overview, Page::Activity, Page::Demand, Page::Market, Page::Advisor];
-    pub const TITLES: [&'static str; 5] = ["Overview", "Activity", "Demand", "Market", "Advisor"];
+    pub const ALL: [Page; 6] = [Page::Overview, Page::Activity, Page::Demand, Page::Market, Page::Advisor, Page::Maintenance];
+    pub const TITLES: [&'static str; 6] = ["Overview", "Activity", "Demand", "Market", "Advisor", "Maintenance"];
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,13 @@ pub struct State {
     pub scroll: [usize; Page::ALL.len()],
     /// Activity: warnings and alerts only.
     pub only_warn: bool,
+    /// Market: which direction's terms the ads are listed by.
+    pub market_dir: Direction,
+    /// Maintenance: which command is picked, counting only the steps that have one. Kept in range where it is read,
+    /// since the steps change as the provider does.
+    pub pick: usize,
+    /// A command a key asked to copy, until the shell takes it.
+    pub copy: Option<String>,
 
     pub id: Identity,
     pub cap: Capacity,
@@ -72,6 +81,24 @@ pub struct State {
     pub ads_ok: bool,
     /// Whether the board's ads have ever been read: until they have, an empty list is not an empty market.
     pub ads_seen: bool,
+    /// The reverse side as last read, and whether the last read answered.
+    pub reverse: Option<ReverseSide>,
+    pub reverse_ok: bool,
+    /// The configured address until the log names the one the side sells from.
+    pub reverse_address: String,
+    /// What is unspent at each address as last read (`None` never read), and whether the last read answered.
+    pub main_coins: Option<Vec<Coin>>,
+    pub main_coins_ok: bool,
+    pub reverse_coins: Option<Vec<Coin>>,
+    pub reverse_coins_ok: bool,
+    /// Whether an explorer is configured at all.
+    pub explorer: bool,
+    /// What the status command last read at the reverse address, when it read it, and whether its last run answered.
+    /// `shows_stock`: whether one is configured at all.
+    pub stock: Option<ReverseStock>,
+    pub stock_at: u64,
+    pub stock_ok: bool,
+    pub shows_stock: bool,
 
     pub deadline_warn_secs: u64,
     fee_ladder_bps: Vec<u64>,
@@ -80,11 +107,14 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(cfg: &FastBridgeConfig, shows_eth: bool) -> Self {
+    pub fn new(cfg: &FastBridgeConfig, shows_eth: bool, explorer: bool, shows_stock: bool) -> Self {
         Self {
             now: 0,
             scroll: [0; Page::ALL.len()],
             only_warn: false,
+            market_dir: Direction::Forward,
+            pick: 0,
+            copy: None,
             id: Identity { pool_account: cfg.pool_account.clone(), ..Default::default() },
             cap: Capacity::default(),
             cap_seen: false,
@@ -107,6 +137,18 @@ impl State {
             board_ok: false,
             ads_ok: false,
             ads_seen: false,
+            reverse: None,
+            reverse_ok: false,
+            reverse_address: cfg.reverse_address.clone(),
+            main_coins: None,
+            main_coins_ok: false,
+            reverse_coins: None,
+            reverse_coins_ok: false,
+            explorer,
+            stock: None,
+            stock_at: 0,
+            stock_ok: false,
+            shows_stock,
             deadline_warn_secs: cfg.advisor.deadline_warn_secs,
             fee_ladder_bps: cfg.advisor.fee_ladder_bps.clone(),
             pool_account_fixed: !cfg.pool_account.is_empty(),
@@ -178,10 +220,65 @@ impl State {
                 }
             }
             Event::Eth(e) => self.eth = e,
+            Event::Reverse(r) => {
+                self.reverse_ok = r.is_some();
+                if r.is_some() {
+                    self.reverse = r;
+                }
+            }
+            Event::MainCoins(c) => {
+                self.main_coins_ok = c.is_some();
+                if c.is_some() {
+                    self.main_coins = c;
+                }
+            }
+            Event::Stock(st) => {
+                self.stock_ok = st.is_some();
+                if st.is_some() {
+                    self.stock = st;
+                    self.stock_at = self.now;
+                }
+            }
+            Event::ReverseCoins(c) => {
+                self.reverse_coins_ok = c.is_some();
+                if c.is_some() {
+                    self.reverse_coins = c;
+                }
+            }
         }
     }
 
+    /// The commands on the Maintenance page as they paste: one per step that has one, its lines joined with ` \`.
+    pub fn commands(&self) -> Vec<String> {
+        self.upkeep().steps.iter().filter(|s| !s.cmd.is_empty()).map(|s| s.cmd.join(" \\\n")).collect()
+    }
+    /// The picked command's place among them, or `None` when there is none.
+    pub fn picked(&self) -> Option<usize> {
+        let n = self.commands().len();
+        (n > 0).then(|| self.pick.min(n - 1))
+    }
+
     pub fn on_key(&mut self, page: Page, k: KeyEvent) {
+        if page == Page::Maintenance {
+            let n = self.commands().len();
+            // shift picks; K and J too, for a terminal that sends shifted arrows as plain ones
+            let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+            let s = &mut self.scroll[page as usize];
+            match k.code {
+                KeyCode::Up if shift => self.pick = self.pick.min(n.saturating_sub(1)).saturating_sub(1),
+                KeyCode::Char('K') => self.pick = self.pick.min(n.saturating_sub(1)).saturating_sub(1),
+                KeyCode::Down if shift => self.pick = (self.pick + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('J') => self.pick = (self.pick + 1).min(n.saturating_sub(1)),
+                KeyCode::Up | KeyCode::Char('k') => *s = s.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => *s += 1,
+                KeyCode::PageUp => *s = s.saturating_sub(10),
+                KeyCode::PageDown => *s += 10,
+                KeyCode::Char('g') | KeyCode::Home => *s = 0,
+                KeyCode::Char('c') | KeyCode::Enter => self.copy = self.picked().and_then(|i| self.commands().into_iter().nth(i)),
+                _ => {}
+            }
+            return;
+        }
         // in the activity feed "up" goes back in time, which is further from the newest line
         let back = page == Page::Activity;
         let s = &mut self.scroll[page as usize];
@@ -194,6 +291,13 @@ impl State {
             KeyCode::Char('g') | KeyCode::Home | KeyCode::Char('G') | KeyCode::End => *s = 0,
             KeyCode::Char('w') if page == Page::Activity => {
                 self.only_warn = !self.only_warn;
+                *s = 0;
+            }
+            KeyCode::Char('d') if page == Page::Market => {
+                self.market_dir = match self.market_dir {
+                    Direction::Forward => Direction::Reverse,
+                    Direction::Reverse => Direction::Forward,
+                };
                 *s = 0;
             }
             _ => {}
@@ -211,6 +315,7 @@ impl State {
                 self.cap_seen = true;
                 self.cap_at = entry.at;
             }
+            Some(Signal::ReverseOn(address)) => self.reverse_address.clone_from(address),
             None => {}
         }
         // a line that repeats the one before it (an explorer left alone, the hourly low-TAC warning) is counted, not listed again.
@@ -248,16 +353,34 @@ impl State {
     pub fn free_from_log(&self) -> Option<Option<u64>> {
         self.terms.as_ref().and_then(|t| t.available).is_none().then(|| self.cap_at.map(|at| self.now.saturating_sub(at)))
     }
-    /// TAC on Bitcoin taken by finished swaps, by this data directory's records.
-    pub fn received(&self) -> u128 {
-        total(self.swaps.iter().filter(|s| s.done()).map(|s| s.pays))
+    fn of(&self, d: Direction) -> impl Iterator<Item = &Swap> {
+        self.swaps.iter().filter(move |s| s.direction == d)
     }
-    /// TAC on Bitcoin that open swaps will pay.
-    pub fn incoming(&self) -> u128 {
-        total(self.swaps.iter().filter(|s| !s.closed()).map(|s| s.pays))
+    /// What bridgers have paid the provider in this direction, by this data directory's records: TAC on Bitcoin
+    /// forward, pool TAC in reverse.
+    pub fn received(&self, d: Direction) -> u128 {
+        total(self.of(d).filter(|s| s.paid()).map(|s| s.pays))
     }
-    pub fn earned(&self) -> u128 {
-        total(self.swaps.iter().filter(|s| s.done()).map(Swap::fee))
+    /// What swaps under way will pay it, once they finish.
+    pub fn incoming(&self, d: Direction) -> u128 {
+        total(self.of(d).filter(|s| !s.closed() && !s.paid()).map(|s| s.pays))
+    }
+    pub fn earned(&self, d: Direction) -> u128 {
+        total(self.of(d).filter(|s| s.paid()).map(Swap::fee))
+    }
+    pub fn open(&self, d: Direction) -> usize {
+        self.of(d).filter(|s| !s.closed()).count()
+    }
+    /// Whether any reverse swap has ever been recorded here.
+    pub fn has_reverse_swaps(&self) -> bool {
+        self.of(Direction::Reverse).next().is_some()
+    }
+    /// The reverse side's terms while it is on.
+    pub fn reverse_terms(&self) -> Option<&Terms> {
+        match &self.reverse {
+            Some(ReverseSide::On { terms, .. }) => Some(terms),
+            _ => None,
+        }
     }
     /// Every ad posted under this provider's claim key. The board checks no signature, so anyone can post one.
     fn my_ads(&self) -> impl Iterator<Item = &Ad> {
@@ -282,9 +405,51 @@ impl State {
     pub fn name(&self) -> String {
         self.my_ad().map(|a| a.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "provider".into())
     }
+    /// The board's ads with the terms of `d`, cheapest first at the reference size. In reverse, only ads that carry readable reverse terms.
+    pub fn market(&self, d: Direction) -> Vec<(&Ad, &Terms)> {
+        let mut out: Vec<(&Ad, &Terms)> = match d {
+            Direction::Forward => self.ads.iter().map(|a| (a, &a.terms)).collect(),
+            Direction::Reverse => self.ads.iter().filter_map(|a| a.reverse_terms.as_ref().map(|t| (a, t))).collect(),
+        };
+        out.sort_by_key(|(_, t)| effective_bps(100 * UNIT, t.fee_bps, t.flat));
+        out
+    }
+    /// Where the reverse fee stands against the other providers' reverse terms. `None` while the side is not on.
+    pub fn reverse_standing(&self) -> Option<(advisor::Standing, Option<String>)> {
+        let own = self.reverse_terms()?;
+        let mine = self.my_ad();
+        let rivals: Vec<(u64, &Ad)> = self
+            .ads
+            .iter()
+            .filter(|a| !mine.is_some_and(|m| std::ptr::eq(m, *a)))
+            .filter_map(|a| a.reverse_terms.as_ref().filter(|t| advisor::rival(own, t)).map(|t| (advisor::all_in(t.fee_bps, t.flat), a)))
+            .collect();
+        let fees: Vec<u64> = rivals.iter().map(|(fee, _)| *fee).collect();
+        let standing = advisor::advise(own, &[], &self.fee_ladder_bps, self.ads_seen.then_some(fees.as_slice())).standing;
+        Some((standing, rivals.iter().min_by_key(|(fee, _)| *fee).map(|(_, a)| a.name.clone())))
+    }
     /// `None` while the provider's terms are not known.
     pub fn blocker(&self, w: &Want) -> Option<Option<&'static str>> {
         self.terms.as_ref().map(|t| advisor::blocker(t, self.free(), w))
+    }
+    /// The stock as read, only while it is of the address the reverse side sells from: one read of another address says nothing of this one.
+    pub fn reverse_stock(&self) -> Option<&ReverseStock> {
+        self.stock.as_ref().filter(|s| s.address == self.reverse_address)
+    }
+    pub fn upkeep(&self) -> Upkeep {
+        upkeep::upkeep(&Facts {
+            swaps: &self.swaps,
+            main: self.main_coins.as_deref(),
+            reverse_coins: self.reverse_coins.as_deref(),
+            reverse_tac: self.reverse_stock().map(|s| s.tac),
+            reverse: self.reverse.as_ref(),
+            main_address: &self.id.bitcoin_address,
+            reverse_address: &self.reverse_address,
+            pool_account: &self.id.pool_account,
+            free: self.free(),
+            forward_min: self.terms.as_ref().map(|t| t.min),
+            explorer: self.explorer,
+        })
     }
     pub fn advice(&self) -> Option<Advice> {
         let own = self.terms.as_ref()?;
@@ -308,10 +473,13 @@ mod tests {
     use super::*;
 
     fn state() -> State {
-        State::new(&FastBridgeConfig::default(), false)
+        State::new(&FastBridgeConfig::default(), false, false, false)
     }
     fn swap(phase: &str, created: u64, pays: u128, gets: u128) -> Swap {
-        Swap { id: format!("{phase}{created}"), phase: phase.into(), created, deadline: 0, pays, gets, lock_txid: String::new() }
+        Swap { id: format!("{phase}{created}"), phase: phase.into(), created, pays, gets, ..Default::default() }
+    }
+    fn reverse(phase: &str, created: u64, pays: u128, gets: u128) -> Swap {
+        Swap { direction: Direction::Reverse, ..swap(phase, created, pays, gets) }
     }
 
     #[test]
@@ -334,8 +502,60 @@ mod tests {
 
         st.apply(Event::Swaps(Some(swaps)));
 
-        assert_eq!((st.received(), st.incoming(), st.earned()), (110, 220, 10));
+        assert_eq!((st.received(Direction::Forward), st.incoming(Direction::Forward), st.earned(Direction::Forward)), (110, 220, 10));
         assert_eq!(st.swaps[0].phase, "offered");
+    }
+
+    #[test]
+    fn each_direction_is_summed_apart_and_a_reverse_claim_is_paid_while_still_open() {
+        let mut st = state();
+        let swaps = vec![swap("done", 1, 110, 100), reverse("claimed", 2, 505, 500), reverse("offered", 3, 202, 200), reverse("counter-took", 4, 909, 900)];
+
+        st.apply(Event::Swaps(Some(swaps)));
+
+        let by = |d| (st.received(d), st.incoming(d), st.earned(d), st.open(d));
+        assert_eq!((by(Direction::Forward), by(Direction::Reverse)), ((110, 0, 10, 0), (505, 202, 5, 2)));
+    }
+
+    #[test]
+    fn the_market_in_reverse_lists_only_ads_with_reverse_terms_cheapest_first() {
+        let mut st = state();
+        let t = |bps| Terms { min: 1, max: 9 * UNIT, fee_bps: bps, available: Some(UNIT), ..Default::default() };
+        let ad = |name: &str, rev: Option<Terms>| Ad {
+            name: name.into(),
+            claim_pub: name.into(),
+            terms: t(10),
+            any_tac: false,
+            reverse: rev.is_some(),
+            reverse_terms: rev,
+        };
+        st.apply(Event::Ads(Some(vec![ad("dear", Some(t(90))), ad("forward only", None), ad("cheap", Some(t(20)))])));
+
+        let names = |d| st.market(d).iter().map(|(a, _)| a.name.clone()).collect::<Vec<_>>();
+
+        assert_eq!(names(Direction::Reverse), ["cheap", "dear"]);
+        assert_eq!(names(Direction::Forward).len(), 3);
+    }
+
+    #[test]
+    fn reverse_standing_is_unknown_while_the_side_is_off_and_measured_against_reverse_terms_when_on() {
+        let mut st = state();
+        let t = |bps| Terms { min: UNIT, max: 9 * UNIT, fee_bps: bps, available: Some(5 * UNIT), ..Default::default() };
+        st.apply(Event::Ads(Some(vec![Ad {
+            name: "rival".into(),
+            claim_pub: "03r".into(),
+            terms: t(1),
+            any_tac: false,
+            reverse: true,
+            reverse_terms: Some(t(50)),
+        }])));
+        st.apply(Event::Reverse(Some(ReverseSide::Off)));
+        let off = st.reverse_standing();
+
+        st.apply(Event::Reverse(Some(ReverseSide::On { terms: t(30), open: Some(0), max_open: 2 })));
+
+        assert!(off.is_none());
+        assert_eq!(st.reverse_standing(), Some((advisor::Standing::Cheapest { next: 50 }, Some("rival".to_string()))));
     }
 
     #[test]
@@ -364,7 +584,7 @@ mod tests {
         let mut st = state();
         st.id.claim_pub = "02me".into();
         let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None, ..Default::default() };
-        let ad = |name: &str, terms: Terms| Ad { name: name.into(), claim_pub: "02me".into(), terms, any_tac: false, reverse: false };
+        let ad = |name: &str, terms: Terms| Ad { name: name.into(), claim_pub: "02me".into(), terms, any_tac: false, reverse: false, reverse_terms: None };
         st.apply(Event::Ads(Some(vec![ad("impostor", Terms { fee_bps: 1, ..own.clone() }), ad("dx-lp", own.clone())])));
         let before_terms = (st.ad_contested(), st.name());
 
@@ -378,7 +598,14 @@ mod tests {
         let mut st = state();
         st.id.claim_pub = "02me".into();
         let own = Terms { min: 10, max: 500, fee_bps: 150, flat: 1, available: None, ..Default::default() };
-        let forged = Ad { name: "impostor".into(), claim_pub: "02me".into(), terms: Terms { fee_bps: 1, ..own.clone() }, any_tac: false, reverse: false };
+        let forged = Ad {
+            name: "impostor".into(),
+            claim_pub: "02me".into(),
+            terms: Terms { fee_bps: 1, ..own.clone() },
+            any_tac: false,
+            reverse: false,
+            reverse_terms: None,
+        };
         st.apply(Event::Terms(Some(own)));
 
         st.apply(Event::Ads(Some(vec![forged])));
@@ -467,6 +694,7 @@ mod tests {
             terms: Terms { fee_bps: bps, available: Some(available), ..own.clone() },
             any_tac: false,
             reverse: false,
+            reverse_terms: None,
         };
         st.apply(Event::Terms(Some(own.clone())));
 
@@ -484,7 +712,14 @@ mod tests {
         let mut st = state();
         let (tac_asset, sats, eth) = (Some(Asset([1; 32])), Some(Asset([0; 32])), Some(Asset([2; 32])));
         let terms = |btc, evm| Terms { btc_asset: btc, evm_asset: evm, min: 1, max: 9, ..Default::default() };
-        let ad = |name: &str, btc, evm| Ad { name: name.into(), claim_pub: name.into(), terms: terms(btc, evm), any_tac: false, reverse: false };
+        let ad = |name: &str, btc, evm| Ad {
+            name: name.into(),
+            claim_pub: name.into(),
+            terms: terms(btc, evm),
+            any_tac: false,
+            reverse: false,
+            reverse_terms: None,
+        };
         let want = |btc| Want { btc_asset: btc, amount: 5, max_fee_bps: None, until: 0 };
         st.apply(Event::Ads(Some(vec![ad("tac", tac_asset, tac_asset), ad("sats for eth", sats, eth), ad("says nothing", None, None)])));
         st.apply(Event::Wants(Some(vec![want(tac_asset), want(sats), want(None)])));
@@ -508,6 +743,68 @@ mod tests {
         st.apply(Event::Wants(Some(vec![want(tac_asset), want(sats)])));
 
         assert_eq!((st.wants.len(), st.other_wants), (1, 1));
+    }
+
+    #[test]
+    fn the_logs_reverse_address_replaces_the_configured_one_and_failed_reads_keep_the_last_coins() {
+        let mut st = State::new(&FastBridgeConfig { reverse_address: "bc1qconfigured".into(), ..Default::default() }, false, true, false);
+        let coin = Coin { txid: "a".repeat(64), vout: 0, sats: 9_000, confirmed: true };
+        st.apply(Event::ReverseCoins(Some(vec![coin.clone()])));
+
+        st.apply(Event::Log(LogEntry { signal: Some(Signal::ReverseOn("bc1qfromthelog".into())), ..LogEntry::plain(Level::Info, "the reverse side is on") }));
+        st.apply(Event::ReverseCoins(None));
+        st.apply(Event::Reverse(None));
+
+        assert_eq!(st.reverse_address, "bc1qfromthelog");
+        assert_eq!((st.reverse_coins, st.reverse_coins_ok, st.reverse, st.reverse_ok), (Some(vec![coin]), false, None, false));
+    }
+
+    #[test]
+    fn a_stock_read_of_another_address_says_nothing_of_the_reverse_side() {
+        let mut st = State::new(&FastBridgeConfig { reverse_address: "bc1qmine".into(), ..Default::default() }, false, true, true);
+        let stock = |address: &str| ReverseStock { address: address.into(), notes: 1, tac: 20 * UNIT, sats: Some(1) };
+
+        st.apply(Event::Stock(Some(stock("bc1qother"))));
+        let other = st.reverse_stock().is_some();
+        st.apply(Event::Stock(Some(stock("bc1qmine"))));
+        st.apply(Event::Stock(None));
+
+        assert!(!other);
+        assert_eq!((st.reverse_stock().map(|s| s.tac), st.stock_ok), (Some(20 * UNIT), false));
+    }
+
+    #[test]
+    fn the_picked_command_is_copied_whole_and_the_pick_stays_on_a_command() {
+        let mut st = state();
+        let shifted = |c| KeyEvent::new(c, KeyModifiers::SHIFT);
+        let all = st.commands();
+
+        st.on_key(Page::Maintenance, KeyEvent::from(KeyCode::Down));
+        let scrolled = (st.scroll[Page::Maintenance as usize], st.picked());
+        st.on_key(Page::Maintenance, shifted(KeyCode::Down));
+        st.on_key(Page::Maintenance, KeyEvent::from(KeyCode::Char('J')));
+        st.on_key(Page::Maintenance, KeyEvent::from(KeyCode::Char('c')));
+
+        // with nothing read, the steps are: print the reverse address, then back up
+        assert_eq!(all, ["scripts/helpers/fast-bridge status", "make backup DEST=<another disk>"]);
+        assert_eq!(scrolled, (1, Some(0)));
+        assert_eq!((st.picked(), st.copy.as_deref()), (Some(1), Some("make backup DEST=<another disk>")));
+    }
+
+    #[test]
+    fn a_command_of_several_lines_is_copied_as_one_that_pastes() {
+        let mut st = state();
+        st.reverse_address = "bc1qrev".into();
+        st.explorer = true;
+        st.apply(Event::Reverse(Some(ReverseSide::Off)));
+        st.apply(Event::ReverseCoins(Some(vec![
+            Coin { txid: "f".repeat(64), vout: 0, sats: 30_000, confirmed: true },
+            Coin { txid: "f".repeat(64), vout: 1, sats: DUST, confirmed: true },
+        ])));
+
+        let cmds = st.commands();
+
+        assert_eq!(cmds[0], "sudoedit /etc/tacit-fastbridge-lp/env \\\nsudo systemctl restart tacit-fastbridge-lp");
     }
 
     #[test]

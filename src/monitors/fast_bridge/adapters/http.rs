@@ -1,9 +1,9 @@
-//! The provider's API, the board and an Ethereum RPC, over HTTP.
+//! The provider's API, the board, an Ethereum RPC and a Bitcoin explorer, over HTTP.
 
 use super::wire;
 use crate::monitors::fast_bridge::{
-    model::{Ad, Health, Terms, Want},
-    ports::{Board, Fut, GasBalance, Provider},
+    model::{Ad, Coin, Health, ReverseSide, Terms, Want},
+    ports::{Board, Chain, Fut, GasBalance, Provider},
 };
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -83,6 +83,16 @@ impl Provider for HttpProvider {
             Ok(Health { ok: h.ok && succeeded, error: if h.error.is_empty() && !succeeded { "/health answered an error status".into() } else { h.error } })
         })
     }
+    fn reverse(&self) -> Fut<'_, ReverseSide> {
+        Box::pin(async move {
+            let resp = self.http.get(format!("{}/reverse/info", self.base)).send().await?;
+            // the route is only there while the side is on; any other failure is a failed read, not "off"
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(ReverseSide::Off);
+            }
+            wire::reverse(&json_body(succeeded(resp)?).await?).context("/reverse/info answered without terms")
+        })
+    }
 }
 
 pub struct HttpBoard {
@@ -140,6 +150,26 @@ impl GasBalance for RpcGas {
             let v = json_body(succeeded(self.http.post(&self.rpc).json(&body).send().await?)?).await?;
             let hex = v.get("result").and_then(Value::as_str).context("the RPC answered without a result")?;
             Ok(u128::from_str_radix(hex.trim_start_matches("0x"), 16)? as f64 / 1e18)
+        })
+    }
+}
+
+pub struct HttpChain {
+    http: reqwest::Client,
+    base: String,
+}
+
+pub fn create_http_chain(http: reqwest::Client, base: &str) -> HttpChain {
+    HttpChain { http, base: base.trim_end_matches('/').to_string() }
+}
+
+impl Chain for HttpChain {
+    fn unspent<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<Coin>> {
+        Box::pin(async move {
+            // the address comes from the log, and goes into a URL path
+            let address = wire::btc_address(address).context("not a Bitcoin address")?;
+            // an address with more outputs than one answer may hold fails here: part of a list is not the list
+            wire::coins(&get(&self.http, &format!("{}/address/{address}/utxo", self.base)).await?).context("the explorer answered without a list")
         })
     }
 }
@@ -233,6 +263,29 @@ mod tests {
         let wants = create_http_board(create_http_client(), &[base]).wants().await;
 
         assert!(wants.is_err());
+    }
+
+    #[tokio::test]
+    async fn reverse_off_is_only_a_not_found_and_any_other_failure_is_a_failed_read() {
+        let off = serve_once("404 Not Found".into(), r#"{"error":"not found"}"#).await;
+        let failing = serve_once("500 Internal Server Error".into(), "{}").await;
+
+        let (off, failing) =
+            (create_http_provider(create_http_client(), &off).reverse().await, create_http_provider(create_http_client(), &failing).reverse().await);
+
+        assert_eq!(off.ok(), Some(ReverseSide::Off));
+        assert!(failing.is_err());
+    }
+
+    #[tokio::test]
+    async fn an_address_that_is_not_one_is_never_put_in_a_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let base = format!("http://{}", listener.local_addr().expect("an address"));
+
+        let read = create_http_chain(create_http_client(), &base).unspent("../../tx/push?x=").await;
+
+        assert!(read.is_err());
+        assert!(timeout(Duration::from_millis(200), listener.accept()).await.is_err(), "the explorer was asked");
     }
 
     #[test]

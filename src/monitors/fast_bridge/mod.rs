@@ -1,5 +1,6 @@
 //! The fast bridge monitor: one liquidity provider, watched through its log, its API, its swap records and the board.
-//! Read only. It never sees the provider's key and sends the provider nothing but GETs.
+//! Read only. It never sees the provider's key and sends the provider nothing but GETs. The Maintenance page prints
+//! commands for `scripts/helpers/fast-bridge`, which holds the key; tacmon never runs them.
 
 pub mod adapters;
 mod advisor;
@@ -9,6 +10,7 @@ mod model;
 mod ports;
 mod state;
 mod ui;
+mod upkeep;
 
 pub use config::FastBridgeConfig;
 
@@ -36,8 +38,8 @@ pub struct FastBridge {
 pub fn create_fast_bridge(cfg: &FastBridgeConfig, demo: bool) -> FastBridge {
     let ports = if demo { adapters::memory::create_demo_ports(now()) } else { adapters::create_ports(cfg) };
     // a demo shows nothing of the operator's: the pool account in their config would otherwise sit in the header
-    let cfg = if demo { FastBridgeConfig { pool_account: String::new(), ..cfg.clone() } } else { cfg.clone() };
-    FastBridge { state: State::new(&cfg, ports.gas.is_some()), cfg, ports: Some(ports), events: None }
+    let cfg = if demo { FastBridgeConfig { pool_account: String::new(), reverse_address: String::new(), ..cfg.clone() } } else { cfg.clone() };
+    FastBridge { state: State::new(&cfg, ports.gas.is_some(), ports.chain.is_some(), ports.inventory.is_some()), cfg, ports: Some(ports), events: None }
 }
 
 impl Monitor for FastBridge {
@@ -55,7 +57,7 @@ impl Monitor for FastBridge {
     }
     fn start(&mut self, wake: Wake) {
         if let Some(ports) = self.ports.take() {
-            self.events = Some(feed::start(ports, &self.cfg.refresh, self.cfg.pool_account.clone(), wake));
+            self.events = Some(feed::start(ports, &self.cfg.refresh, self.cfg.pool_account.clone(), self.cfg.reverse_address.clone(), wake));
         }
     }
     fn refresh(&mut self, now: u64) {
@@ -78,9 +80,14 @@ impl Monitor for FastBridge {
     fn draw_page(&self, f: &mut Frame, area: Rect, page: usize, th: &Theme) {
         ui::page(f, area, Page::ALL[page], &self.state, th);
     }
+    fn take_copy(&mut self) -> Option<String> {
+        self.state.copy.take()
+    }
     fn hints(&self, page: usize) -> &'static str {
         match Page::ALL[page] {
             Page::Activity => "↑↓ scroll · g newest · w warnings only",
+            Page::Market => "↑↓ scroll · d direction",
+            Page::Maintenance => "↑↓ scroll · shift+↑↓ pick a command · c copy it · commands run from the tacmon checkout",
             _ => "↑↓ scroll",
         }
     }
