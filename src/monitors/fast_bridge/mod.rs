@@ -6,6 +6,7 @@ pub mod adapters;
 mod advisor;
 mod config;
 mod feed;
+mod ledger;
 mod model;
 mod ports;
 mod state;
@@ -88,6 +89,7 @@ impl Monitor for FastBridge {
             Page::Activity => "↑↓ scroll · g newest · w warnings only",
             Page::Market => "↑↓ scroll · d direction",
             Page::Maintenance => "↑↓ scroll · shift+↑↓ pick a command · c copy it · commands run from the tacmon checkout",
+            Page::Transactions => "↑↓ pick a transaction · enter or c copy its explorer link",
             _ => "↑↓ scroll",
         }
     }

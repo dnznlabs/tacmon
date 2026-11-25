@@ -1,7 +1,10 @@
 //! Every port answered from memory: the backend for tests and for `--demo`. It reads nothing and sends nothing.
 
 use crate::monitors::fast_bridge::{
-    model::{Ad, Capacity, Coin, DUST, Direction, Health, Identity, Level, LogEntry, ReverseSide, ReverseStock, Signal, Swap, Terms, UNIT, Want},
+    model::{
+        Ad, Capacity, ChainTx, Coin, DUST, Direction, Health, Identity, Level, LogEntry, Outlook, ReverseSide, ReverseStock, Role, Signal, Swap, Terms, UNIT,
+        Want,
+    },
     ports::{Board, Chain, Fut, GasBalance, Inventory, LogFeed, Ports, Provider, QUEUE, SwapStore},
 };
 use std::sync::Arc;
@@ -19,6 +22,10 @@ pub struct Memory {
     /// What is unspent at each address. An address not listed holds nothing.
     pub coins: Vec<(String, Vec<Coin>)>,
     pub stock: ReverseStock,
+    /// The transactions listed at each address, the ones known by id only, and the chain's outlook.
+    pub txs: Vec<(String, Vec<ChainTx>)>,
+    pub lookups: Vec<ChainTx>,
+    pub outlook: Outlook,
 }
 
 impl Provider for Memory {
@@ -42,6 +49,15 @@ impl Inventory for Memory {
 impl Chain for Memory {
     fn unspent<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<Coin>> {
         Box::pin(async move { Ok(self.coins.iter().find(|(a, _)| a == address).map(|(_, c)| c.clone()).unwrap_or_default()) })
+    }
+    fn history<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<ChainTx>> {
+        Box::pin(async move { Ok(self.txs.iter().find(|(a, _)| a == address).map(|(_, t)| t.clone()).unwrap_or_default()) })
+    }
+    fn tx<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<ChainTx>> {
+        Box::pin(async move { Ok(self.lookups.iter().find(|t| t.txid == txid).cloned()) })
+    }
+    fn outlook(&self) -> Fut<'_, Outlook> {
+        Box::pin(async move { Ok(self.outlook) })
     }
 }
 
@@ -112,6 +128,11 @@ pub fn create_demo_ports(now: u64) -> Ports {
         gets,
         lock_txid: format!("{}{id}", "f".repeat(56)),
         take_txid: if phase == "done" { format!("{}{id}", "e".repeat(56)) } else { String::new() },
+        linked: [(Role::BridgerLock, "f", true), (Role::TakeCommit, "9", phase == "done"), (Role::Take, "e", phase == "done")]
+            .into_iter()
+            .filter(|(_, _, named)| *named)
+            .map(|(role, c, _)| (role, format!("{}{id}", c.repeat(56))))
+            .collect(),
     };
     // the bridger pays pool TAC and gets a note on Bitcoin; no deadline until it has offered its pool lock
     let reverse_swap = |id: &str, phase: &str, age: u64, gets: u128| Swap {
@@ -119,12 +140,25 @@ pub fn create_demo_ports(now: u64) -> Ports {
         deadline: if matches!(phase, "built" | "broadcast") { 0 } else { now - age + 14_400 },
         pays: gets * 10_000 / 9_970 + UNIT / 10,
         take_txid: String::new(),
+        linked: vec![(Role::LockCommit, format!("{}{id}", "8".repeat(56))), (Role::Lock, format!("{}{id}", "f".repeat(56)))],
         ..swap(id, phase, age, gets)
     };
     let reverse_terms = Terms { min: t(10), max: t(1000), fee_bps: 30, flat: UNIT / 10, available: Some(t(4)), ..Default::default() };
     let (main, reverse) = ("bc1qdemo0000000000000000000000000000000demo", "bc1qdemo00000000000000000000000000000reverse");
     let coin = |txid: String, vout, sats| Coin { txid, vout, sats, confirmed: true };
     let take = |id: &str| format!("{}{id}", "e".repeat(56));
+    const TIP: u64 = 900_000;
+    // a block about every ten minutes back from the tip
+    let mined = |txid: String, age: u64, fee, vsize, (received, sent): (u64, u64)| ChainTx {
+        txid,
+        fee,
+        vsize,
+        height: Some(TIP - age / 600),
+        time: Some(now - age),
+        received,
+        sent,
+        note: received > 0 && received % DUST == 0,
+    };
     let ad = |name: &str, key: &str, bps: u64, max: u128, avail: u128, any_tac: bool, reverse_terms: Option<Terms>| Ad {
         name: name.into(),
         claim_pub: key.into(),
@@ -174,6 +208,37 @@ pub fn create_demo_ports(now: u64) -> Ports {
             (reverse.into(), vec![coin(format!("{}0f0f0f0f", "c".repeat(56)), 0, 6_200), coin(format!("{}0f0f0f0f", "c".repeat(56)), 1, DUST)]),
         ],
         stock: ReverseStock { address: reverse.into(), notes: 1, tac: t(4), sats: Some(6_200) },
+        txs: vec![
+            (
+                main.into(),
+                vec![
+                    mined(take("c9d0e1f2"), 9_000, 2_300, 430, (2 * DUST, 0)),
+                    mined(format!("{}c9d0e1f2", "9".repeat(56)), 9_060, 1_100, 141, (2_300 + 2 * DUST, 0)),
+                    mined(take("0a1b2c3d"), 21_000, 2_300, 430, (2 * DUST, 0)),
+                    mined(format!("{}9abcdef0", "d".repeat(56)), 30_000, 420, 141, (50_000, 0)),
+                ],
+            ),
+            (
+                reverse.into(),
+                vec![
+                    // sent at a fee rate under the going one: the row the page is there to show
+                    ChainTx { txid: format!("{}5a5a5a5a", "b".repeat(56)), fee: 480, vsize: 430, received: DUST, note: true, ..Default::default() },
+                    mined(format!("{}b7c8d9e0", "f".repeat(56)), 900, 2_600, 430, (0, DUST + 3_000)),
+                    mined(format!("{}b7c8d9e0", "8".repeat(56)), 960, 1_200, 141, (3_000, 9_200)),
+                    mined(format!("{}0f0f0f0f", "c".repeat(56)), 40_000, 900, 430, (6_200 + DUST, 0)),
+                ],
+            ),
+        ],
+        lookups: vec![
+            mined(format!("{}a1b2c3d4", "f".repeat(56)), 1_300, 2_400, 430, (0, 0)),
+            ChainTx { txid: format!("{}e5f6a7b8", "f".repeat(56)), fee: 2_600, vsize: 430, ..Default::default() },
+            mined(format!("{}c9d0e1f2", "f".repeat(56)), 9_900, 2_500, 430, (0, 0)),
+            mined(format!("{}0a1b2c3d", "f".repeat(56)), 22_000, 2_300, 430, (0, 0)),
+            mined(format!("{}0a1b2c3d", "9".repeat(56)), 21_060, 1_100, 141, (0, 0)),
+            mined(format!("{}f1e2d3c4", "f".repeat(56)), 15_000, 2_400, 430, (0, 0)),
+            mined(format!("{}f1e2d3c4", "8".repeat(56)), 15_060, 1_200, 141, (0, 0)),
+        ],
+        outlook: Outlook { tip: TIP, hour_milli: 4_200 },
         terms,
     };
     let entry =

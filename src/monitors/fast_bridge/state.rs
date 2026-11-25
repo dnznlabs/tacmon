@@ -4,11 +4,12 @@ use super::{
     advisor::{self, Advice},
     config::FastBridgeConfig,
     feed::Event,
+    ledger::{self, TxRow},
     model::*,
     upkeep::{self, Facts, Upkeep},
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 const MAX_LOG: usize = 5000;
 
@@ -20,11 +21,12 @@ pub enum Page {
     Market,
     Advisor,
     Maintenance,
+    Transactions,
 }
 
 impl Page {
-    pub const ALL: [Page; 6] = [Page::Overview, Page::Activity, Page::Demand, Page::Market, Page::Advisor, Page::Maintenance];
-    pub const TITLES: [&'static str; 6] = ["Overview", "Activity", "Demand", "Market", "Advisor", "Maintenance"];
+    pub const ALL: [Page; 7] = [Page::Overview, Page::Activity, Page::Demand, Page::Market, Page::Advisor, Page::Maintenance, Page::Transactions];
+    pub const TITLES: [&'static str; 7] = ["Overview", "Log", "Demand", "Market", "Advisor", "Maint", "Tx"];
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +47,11 @@ pub struct State {
     /// Maintenance: which command is picked, counting only the steps that have one. Kept in range where it is read,
     /// since the steps change as the provider does.
     pub pick: usize,
-    /// A command a key asked to copy, until the shell takes it.
+    /// Transactions: the picked row's id, and where it was, for when that transaction is no longer listed.
+    tx_pick: Option<(String, usize)>,
+    /// Where a transaction's page is on the configured explorer's site. Empty with no explorer: the id is copied bare.
+    tx_link: String,
+    /// A command or a link a key asked to copy, until the shell takes it.
     pub copy: Option<String>,
 
     pub id: Identity,
@@ -99,6 +105,19 @@ pub struct State {
     pub stock_at: u64,
     pub stock_ok: bool,
     pub shows_stock: bool,
+    /// The latest transactions at each address as last read (`None` never read), and whether the last read answered.
+    pub main_txs: Option<Vec<ChainTx>>,
+    pub main_txs_ok: bool,
+    pub reverse_txs: Option<Vec<ChainTx>>,
+    pub reverse_txs_ok: bool,
+    /// Swap transactions asked about by id: `Some(None)` is one the explorer does not know. Whether every one asked last was answered.
+    looked: HashMap<String, Option<ChainTx>>,
+    pub lookups_ok: bool,
+    pub outlook: Option<Outlook>,
+    pub outlook_ok: bool,
+    /// When each transaction now unconfirmed was first seen by this run.
+    first_seen: HashMap<String, u64>,
+    tx_stuck_secs: u64,
 
     pub deadline_warn_secs: u64,
     fee_ladder_bps: Vec<u64>,
@@ -114,6 +133,12 @@ impl State {
             only_warn: false,
             market_dir: Direction::Forward,
             pick: 0,
+            tx_pick: None,
+            // an Esplora API lives under /api of the site whose pages show a transaction at /tx/<id>
+            tx_link: Some(cfg.btc_explorer.trim_end_matches('/'))
+                .filter(|b| !b.is_empty())
+                .map(|b| format!("{}/tx/", b.strip_suffix("/api").unwrap_or(b)))
+                .unwrap_or_default(),
             copy: None,
             id: Identity { pool_account: cfg.pool_account.clone(), ..Default::default() },
             cap: Capacity::default(),
@@ -149,6 +174,16 @@ impl State {
             stock_at: 0,
             stock_ok: false,
             shows_stock,
+            main_txs: None,
+            main_txs_ok: false,
+            reverse_txs: None,
+            reverse_txs_ok: false,
+            looked: HashMap::new(),
+            lookups_ok: false,
+            outlook: None,
+            outlook_ok: false,
+            first_seen: HashMap::new(),
+            tx_stuck_secs: cfg.advisor.tx_stuck_secs,
             deadline_warn_secs: cfg.advisor.deadline_warn_secs,
             fee_ladder_bps: cfg.advisor.fee_ladder_bps.clone(),
             pool_account_fixed: !cfg.pool_account.is_empty(),
@@ -217,6 +252,9 @@ impl State {
                     // open ones first, then the newest
                     s.sort_by(|a, b| a.closed().cmp(&b.closed()).then(b.created.cmp(&a.created)));
                     self.swaps = s;
+                    // an answer about a transaction no followed swap names any more is not kept
+                    let followed: HashSet<String> = ledger::linked_ids(&self.swaps).into_iter().collect();
+                    self.looked.retain(|id, _| followed.contains(id));
                 }
             }
             Event::Eth(e) => self.eth = e,
@@ -245,7 +283,68 @@ impl State {
                     self.reverse_coins = c;
                 }
             }
+            Event::MainTxs(t) => {
+                self.main_txs_ok = t.is_some();
+                if t.is_some() {
+                    self.main_txs = t;
+                    self.see_unconfirmed();
+                }
+            }
+            Event::ReverseTxs(t) => {
+                self.reverse_txs_ok = t.is_some();
+                if t.is_some() {
+                    self.reverse_txs = t;
+                    self.see_unconfirmed();
+                }
+            }
+            Event::Lookups(found, answered) => {
+                self.lookups_ok = answered;
+                self.looked.extend(found);
+                self.see_unconfirmed();
+            }
+            Event::Outlook(o) => {
+                self.outlook_ok = o.is_some();
+                if o.is_some() {
+                    self.outlook = o;
+                }
+            }
         }
+    }
+
+    /// Notes when each unconfirmed transaction was first seen, and forgets the ones that are no longer unconfirmed.
+    fn see_unconfirmed(&mut self) {
+        let lists = self.main_txs.iter().chain(&self.reverse_txs).flatten();
+        let waiting: HashSet<&str> = lists.chain(self.looked.values().flatten()).filter(|t| t.height.is_none()).map(|t| t.txid.as_str()).collect();
+        self.first_seen.retain(|id, _| waiting.contains(id.as_str()));
+        for id in waiting {
+            if !self.first_seen.contains_key(id) {
+                self.first_seen.insert(id.to_string(), self.now);
+            }
+        }
+    }
+
+    /// The picked row's place in `rows`: the transaction picked while it is listed, else the row where it was.
+    /// The rows reorder as transactions confirm, so the pick follows the transaction and not the position.
+    pub fn tx_picked(&self, rows: &[TxRow]) -> Option<usize> {
+        let last = rows.len().checked_sub(1)?;
+        Some(match &self.tx_pick {
+            Some((id, was)) => rows.iter().position(|r| r.txid == *id).unwrap_or((*was).min(last)),
+            None => 0,
+        })
+    }
+
+    /// The Transactions page's rows.
+    pub fn ledger(&self) -> Vec<TxRow> {
+        ledger::rows(&ledger::Facts {
+            swaps: &self.swaps,
+            main: self.main_txs.as_deref(),
+            reverse: self.reverse_txs.as_deref(),
+            looked: &self.looked,
+            outlook: self.outlook,
+            first_seen: &self.first_seen,
+            now: self.now,
+            stuck_secs: self.tx_stuck_secs,
+        })
     }
 
     /// The commands on the Maintenance page as they paste: one per step that has one, its lines joined with ` \`.
@@ -277,6 +376,27 @@ impl State {
                 KeyCode::Char('c') | KeyCode::Enter => self.copy = self.picked().and_then(|i| self.commands().into_iter().nth(i)),
                 _ => {}
             }
+            return;
+        }
+        if page == Page::Transactions {
+            // a table with a cursor: every arrow moves the pick, shifted or not, and the window follows it
+            let rows = self.ledger();
+            let Some(at) = self.tx_picked(&rows) else { return };
+            let last = rows.len() - 1;
+            let to = match k.code {
+                KeyCode::Up | KeyCode::Char('k' | 'K') => at.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j' | 'J') => (at + 1).min(last),
+                KeyCode::PageUp => at.saturating_sub(10),
+                KeyCode::PageDown => (at + 10).min(last),
+                KeyCode::Char('g') | KeyCode::Home => 0,
+                KeyCode::Char('G') | KeyCode::End => last,
+                KeyCode::Char('c') | KeyCode::Enter => {
+                    self.copy = Some(format!("{}{}", self.tx_link, rows[at].txid));
+                    at
+                }
+                _ => at,
+            };
+            self.tx_pick = Some((rows[to].txid.clone(), to));
             return;
         }
         // in the activity feed "up" goes back in time, which is further from the newest line
@@ -449,6 +569,9 @@ impl State {
             free: self.free(),
             forward_min: self.terms.as_ref().map(|t| t.min),
             explorer: self.explorer,
+            stuck: &self.ledger().into_iter().filter(|r| r.stuck).collect::<Vec<_>>(),
+            hour_milli: self.outlook.map(|o| o.hour_milli),
+            now: self.now,
         })
     }
     pub fn advice(&self) -> Option<Advice> {
@@ -819,5 +942,64 @@ mod tests {
         st.apply(Event::Terms(Some(Terms { available: Some(250), ..Default::default() })));
 
         assert_eq!((from_log, st.free()), (Some(300), Some(250)));
+    }
+
+    #[test]
+    fn an_unconfirmed_transaction_is_timed_from_when_it_was_first_seen_and_a_failed_read_keeps_the_last_list() {
+        let mut st = state();
+        let tx = |height| ChainTx { txid: "a".repeat(64), fee: 1_000, vsize: 100, height, ..Default::default() };
+
+        st.tick(1_000);
+        st.apply(Event::ReverseTxs(Some(vec![tx(None)])));
+        st.tick(1_600);
+        st.apply(Event::ReverseTxs(Some(vec![tx(None)])));
+        st.apply(Event::ReverseTxs(None));
+        let waiting = (st.ledger()[0].at, st.ledger()[0].stuck, st.reverse_txs_ok);
+        st.tick(3_000);
+        let stuck = st.ledger()[0].stuck;
+        st.apply(Event::ReverseTxs(Some(vec![tx(Some(7))])));
+
+        assert_eq!((waiting, stuck), ((Some(1_000), false, false), true));
+        assert_eq!((st.ledger()[0].status, st.first_seen.len()), (ledger::Status::Confirmed(None), 0));
+    }
+
+    #[test]
+    fn the_pick_follows_its_transaction_as_rows_reorder_and_enter_copies_its_explorer_link() {
+        let cfg = FastBridgeConfig { btc_explorer: "https://explorer.example/api/".into(), ..Default::default() };
+        let (mut linked, mut bare) = (State::new(&cfg, false, true, false), state());
+        let tx = |c: &str, height| ChainTx { txid: c.repeat(64), fee: 1_000, vsize: 100, height, time: height, ..Default::default() };
+        let key = |st: &mut State, code| st.on_key(Page::Transactions, KeyEvent::from(code));
+        for st in [&mut linked, &mut bare] {
+            st.apply(Event::MainTxs(Some(vec![tx("a", Some(9)), tx("b", Some(8)), tx("c", Some(7))])));
+        }
+
+        key(&mut linked, KeyCode::Down);
+        key(&mut linked, KeyCode::Down);
+        key(&mut linked, KeyCode::Up);
+        // a new unconfirmed transaction sorts above every confirmed one: the pick stays on "b"
+        linked.apply(Event::MainTxs(Some(vec![tx("d", None), tx("a", Some(9)), tx("b", Some(8)), tx("c", Some(7))])));
+        let followed = linked.tx_picked(&linked.ledger());
+        key(&mut linked, KeyCode::Enter);
+        // one no longer listed leaves the pick where it was
+        linked.apply(Event::MainTxs(Some(vec![tx("a", Some(9))])));
+        key(&mut bare, KeyCode::Enter);
+
+        assert_eq!((followed, linked.tx_picked(&linked.ledger())), (Some(2), Some(0)));
+        assert_eq!(linked.copy, Some(format!("https://explorer.example/tx/{}", "b".repeat(64))));
+        assert_eq!(bare.copy, Some("a".repeat(64)));
+    }
+
+    #[test]
+    fn a_lookup_is_kept_only_while_a_followed_swap_names_it() {
+        let mut st = state();
+        let (lock, gone) = ("a".repeat(64), "b".repeat(64));
+        let named = Swap { linked: vec![(Role::BridgerLock, lock.clone())], ..swap("locking", 5, 110, 100) };
+
+        st.apply(Event::Swaps(Some(vec![named])));
+        st.apply(Event::Lookups(vec![(lock.clone(), None), (gone.clone(), None)], true));
+        let before = st.looked.len();
+        st.apply(Event::Swaps(Some(vec![Swap { linked: vec![(Role::BridgerLock, lock)], ..swap("locking", 5, 110, 100) }])));
+
+        assert_eq!((before, st.looked.len(), st.ledger()[0].status), (2, 1, ledger::Status::Missing));
     }
 }

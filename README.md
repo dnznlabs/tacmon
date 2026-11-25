@@ -65,11 +65,12 @@ What a missing piece looks like: a red cross beside `health` (the API does not a
 | KEY | PAGE | SHOWS |
 |:---|:---|:---|
 | `1` | Overview | open and finished swaps of both directions (way, phase, amounts, fee, deadline), latest warnings |
-| `2` | Activity | the provider's log as a feed; `w` for warnings only |
+| `2` | Log | the provider's log as a feed; `w` for warnings only |
 | `3` | Demand | bridgers waiting on the board, and why you are or are not taking each |
 | `4` | Market | every provider on the board, cheapest first; `d` switches between the forward terms and the reverse ones |
 | `5` | Advisor | the forward fee and size against what is waiting now, and the reverse fee against other providers' |
-| `6` | Maintenance | each direction's state, terms and what is at its address, the TAC forward swaps left at the main address, and what to do next, as commands |
+| `6` | Maint | each direction's state, terms and what is at its address, the TAC forward swaps left at the main address, and what to do next, as commands |
+| `7` | Tx | the Bitcoin transactions of your recent swaps and at your two addresses: what each is, its amount, whether it has confirmed, and its fee rate against the going one; `↑↓` picks one and `enter` copies its link on your explorer (its bare id with no explorer set) |
 
 The header is on every page, one line per direction. Forward: TAC free / promised / held, TAC on Bitcoin received and incoming, fees earned. Reverse: on, off or not answering, the pool TAC it can take now, open sends, pool TAC received and incoming, fees earned. Then health, whether your ad is on the board, and whether the swap records can be read. The terms of each direction are on the Advisor and Maintenance pages.
 
@@ -93,7 +94,15 @@ Optional: `~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.t
 
 `fast_bridge.eth_rpc` is empty by default, so the pool account is sent to no RPC and its ETH balance is not shown. Set a URL to show it.
 
-`fast_bridge.btc_explorer` is empty by default too, so the provider's Bitcoin addresses are sent nowhere and the Maintenance page lists no coins. Set an Esplora API (`https://mempool.space/api`) to list them. `fast_bridge.reverse_address` names the reverse side's address before the side is on; once it is, the log names it.
+`fast_bridge.btc_explorer` is empty by default too, so the provider's Bitcoin addresses and its swaps' transaction ids are sent nowhere: the Maintenance page lists no coins, and the Transactions page lists what the swap records name with no status. Set an Esplora API (`https://mempool.space/api`) to read both. The explorer is then asked for what is unspent and what has happened lately at the two addresses, for the transactions of the 50 most recent swaps by id, and for the going fee rate. `fast_bridge.reverse_address` names the reverse side's address before the side is on; once it is, the log names it.
+
+### Transactions
+
+The Transactions page is the Bitcoin side only. A row is a transaction one of your recent swaps names (the bridger's lock, your take and its commit; in reverse your lock, its commit and any refund), or one an explorer lists at your main or reverse address. TAC amounts come from the swap record, never the chain: an explorer sees a 546-sat output, not the TAC riding on it, so a transfer no swap names shows its sats and `note` where TAC may be riding.
+
+An unconfirmed transaction is marked **stuck** when it pays under the rate that confirms within about an hour, or has waited longer than `fast_bridge.advisor.tx_stuck_secs` (30 minutes) since tacmon first saw it. Each stuck one is also a line on the Maintenance page. tacmon bumps nothing: the helper's `bump` replaces a transaction the reverse key sent, and the page prints that command only then. Anything else is for the wallet that sent it.
+
+The Ethereum side is not shown yet: the provider records no Ethereum transaction hashes to look up.
 
 ### Maintenance
 

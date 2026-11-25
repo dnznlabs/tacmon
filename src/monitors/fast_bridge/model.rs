@@ -150,6 +150,40 @@ pub struct Swap {
     pub lock_txid: String,
     /// The provider's take of the bridger's lock: where the TAC it was paid on Bitcoin landed. Empty until taken.
     pub take_txid: String,
+    /// Every Bitcoin transaction the record names, with what it is to the swap. Each id is 64 hex digits.
+    pub linked: Vec<(Role, String)>,
+}
+
+/// What a Bitcoin transaction is to a swap, named as the provider's record names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Forward: the bridger's lock of its TAC, then the provider's take of it (a commit and the take itself).
+    BridgerLock,
+    TakeCommit,
+    Take,
+    /// Reverse: the provider's lock of a note for the bridger (a commit and the lock itself), and its ways back.
+    LockCommit,
+    Lock,
+    Refund,
+    TakeRefund,
+}
+
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::BridgerLock => "bridger's lock",
+            Role::TakeCommit => "take commit",
+            Role::Take => "take",
+            Role::LockCommit => "lock commit",
+            Role::Lock => "lock",
+            Role::Refund => "refund",
+            Role::TakeRefund => "take refund",
+        }
+    }
+    /// Whether the swap's TAC on Bitcoin rides on this transaction. The others only pay for one that does.
+    pub fn carries_tac(self) -> bool {
+        matches!(self, Role::BridgerLock | Role::Take | Role::Lock | Role::Refund)
+    }
 }
 
 impl Swap {
@@ -192,6 +226,45 @@ impl Coin {
     pub fn note_sized(&self) -> bool {
         self.sats <= DUST
     }
+}
+
+/// A transaction as an explorer reports it. `txid` is 64 hex digits: the reader drops anything else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChainTx {
+    pub txid: String,
+    /// What it pays to be mined, in sats, and its size in virtual bytes.
+    pub fee: u64,
+    pub vsize: u64,
+    /// The block it is in. `None`: not confirmed.
+    pub height: Option<u64>,
+    /// When that block was mined.
+    pub time: Option<u64>,
+    /// The sats in its outputs to, and in its inputs from, the address it was listed for. Zero for one looked up by id.
+    pub received: u64,
+    pub sent: u64,
+    /// One of those outputs is the size a Tacit note rides on. Whether one does, and for how much, takes the key to tell.
+    pub note: bool,
+}
+
+impl ChainTx {
+    /// Its fee rate in thousandths of a sat per virtual byte.
+    pub fn rate_milli(&self) -> Option<u64> {
+        (self.vsize > 0).then(|| self.fee.saturating_mul(1000) / self.vsize)
+    }
+}
+
+/// The chain as an explorer sees it now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Outlook {
+    /// The newest block's height.
+    pub tip: u64,
+    /// The fee rate expected to confirm within about an hour (six blocks), in thousandths of a sat per virtual byte.
+    pub hour_milli: u64,
+}
+
+/// "1.16": thousandths of a sat per virtual byte, as sats.
+pub fn rate(milli: u64) -> String {
+    format!("{}.{:02}", milli / 1000, (milli % 1000) / 10)
 }
 
 /// The provider's reverse side: pool TAC in, TAC on Bitcoin out, from an address of its own.
