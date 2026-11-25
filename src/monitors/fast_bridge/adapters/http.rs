@@ -252,6 +252,13 @@ impl Chain for HttpChain {
             Ok(Some(tx))
         })
     }
+    fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool> {
+        Box::pin(async move {
+            let id = wire::txid_text(txid).context("not a transaction id")?;
+            let v = get(&self.http, &format!("{}/tx/{id}/outspend/{vout}", self.base)).await?;
+            v.get("spent").and_then(Value::as_bool).context("the explorer answered without saying")
+        })
+    }
     fn outlook(&self) -> Fut<'_, Outlook> {
         Box::pin(async move {
             let (tip, fees) = (format!("{}/blocks/tip/height", self.base), format!("{}/fee-estimates", self.base));

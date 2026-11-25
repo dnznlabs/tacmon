@@ -119,6 +119,14 @@ pub struct State {
     pub outlook_ok: bool,
     /// When each transaction now unconfirmed was first seen by this run.
     first_seen: HashMap<String, u64>,
+    /// Transactions at the main address that sent a note elsewhere, and whether one of those notes is still unspent.
+    away: HashMap<String, bool>,
+    /// What the key said of each: the TAC it paid the reverse key silently, or `None` when none of it did.
+    /// The oldest first, `ledger::SILENT_KEPT` at most: never dropped for not being listed, since the feed will not
+    /// ask the key twice.
+    silent: VecDeque<(String, Option<u128>)>,
+    /// The transaction the key-holding tool last gave no answer for. `None`: it answered, or was never asked.
+    silent_unread: Option<String>,
     /// When each forward swap now making its pool lock was first seen doing so by this run.
     locking_since: HashMap<String, u64>,
     /// Whether the pool's log on Ethereum is read at all, what was last read of it, and whether the last read answered.
@@ -192,6 +200,9 @@ impl State {
             outlook: None,
             outlook_ok: false,
             first_seen: HashMap::new(),
+            away: HashMap::new(),
+            silent: VecDeque::new(),
+            silent_unread: None,
             locking_since: HashMap::new(),
             shows_pool: false,
             pool: None,
@@ -324,6 +335,21 @@ impl State {
                 self.looked.extend(found.into_iter().filter(|(id, _)| wanted.contains(id)));
                 self.see_unconfirmed();
             }
+            Event::NotesAway(found) => {
+                self.away.extend(found);
+                // a transaction the address no longer lists is not asked about any more
+                let listed: HashSet<&str> = self.main_txs.iter().flatten().map(|t| t.txid.as_str()).collect();
+                self.away.retain(|id, _| listed.contains(id.as_str()));
+            }
+            Event::Silent(id, tac) => {
+                if !self.silent.iter().any(|(known, _)| *known == id) {
+                    self.silent.push_back((id, tac));
+                    if self.silent.len() > ledger::SILENT_KEPT {
+                        self.silent.pop_front();
+                    }
+                }
+            }
+            Event::SilentRead(unread) => self.silent_unread = unread,
             Event::Pool(p) => {
                 self.pool_ok = p.is_some();
                 if p.is_some() {
@@ -602,6 +628,15 @@ impl State {
             explorer: self.explorer,
             // a bridger's lock is the bridger's to bump: it is on the Transactions page, not on the to-do list
             stuck: &self.ledger().into_iter().filter(|r| r.stuck && r.role != Some(Role::BridgerLock)).collect::<Vec<_>>(),
+            // newest first, as the address lists them: only what the key called a silent send, and only while it waits
+            silent: &self
+                .main_txs
+                .iter()
+                .flatten()
+                .filter(|t| self.away.get(&t.txid) == Some(&true))
+                .filter_map(|t| Some((t.txid.clone(), self.silent.iter().find(|(id, _)| *id == t.txid)?.1?)))
+                .collect::<Vec<_>>(),
+            silent_unread: self.silent_unread.as_deref(),
             lock_waits: &self
                 .pool
                 .as_ref()
@@ -1058,5 +1093,47 @@ mod tests {
         st.on_key(Page::Transactions, KeyEvent::from(KeyCode::Enter));
 
         assert_eq!((st.copy.as_deref(), st.pool_ok, st.ledger().len()), (Some(format!("https://eth.example/tx/0x{}", "e".repeat(64)).as_str()), false, 1));
+    }
+
+    #[test]
+    fn only_a_note_the_key_calls_a_silent_send_is_a_normalize_step_and_only_until_it_moves() {
+        let mut st = state();
+        let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
+        let tx = |id: &String| ChainTx { txid: id.clone(), notes_away: vec![0], ..Default::default() };
+        let steps = |st: &State| st.commands().iter().filter(|c| c.contains("normalize")).count();
+        st.apply(Event::MainTxs(Some(vec![tx(&a), tx(&b), tx(&c)])));
+        st.apply(Event::NotesAway(vec![(a.clone(), true), (b.clone(), true), (c.clone(), true)]));
+        let unjudged = steps(&st);
+
+        // the key: a paid the reverse side 200 TAC, b went to someone else, and c has not been judged
+        st.apply(Event::Silent(a.clone(), Some(200 * UNIT)));
+        st.apply(Event::Silent(b.clone(), None));
+        let judged = steps(&st);
+        st.apply(Event::NotesAway(vec![(a.clone(), false)]));
+
+        assert_eq!((unjudged, judged, steps(&st)), (0, 1, 0));
+    }
+
+    #[test]
+    fn a_verdict_outlives_a_list_that_missed_its_transaction_and_a_tool_that_gave_no_answer_is_a_step_until_it_does() {
+        let mut st = state();
+        let a = "a".repeat(64);
+        let tx = ChainTx { txid: a.clone(), notes_away: vec![0], ..Default::default() };
+        let steps = |st: &State, what: &str| st.upkeep().steps.iter().filter(|s| s.text.contains(what)).count();
+        st.apply(Event::MainTxs(Some(vec![tx.clone()])));
+        st.apply(Event::NotesAway(vec![(a.clone(), true)]));
+        st.apply(Event::Silent(a.clone(), Some(200 * UNIT)));
+
+        // one round the explorer's list is without it, and the feed, which has judged it, does not ask the key again
+        st.apply(Event::MainTxs(Some(vec![])));
+        st.apply(Event::NotesAway(vec![]));
+        st.apply(Event::MainTxs(Some(vec![tx])));
+        st.apply(Event::NotesAway(vec![(a.clone(), true)]));
+        let back = steps(&st, "sent to the reverse side silently");
+        st.apply(Event::SilentRead(Some(a.clone())));
+        let failing = steps(&st, "gave no answer");
+        st.apply(Event::SilentRead(None));
+
+        assert_eq!((back, failing, steps(&st, "gave no answer")), (1, 1, 0));
     }
 }

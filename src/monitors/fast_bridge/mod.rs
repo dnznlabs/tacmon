@@ -1,6 +1,7 @@
 //! The fast bridge monitor: one liquidity provider, watched through its log, its API, its swap records and the board.
 //! Read only. It never sees the provider's key and sends the provider nothing but GETs. The Maintenance page prints
-//! commands for `scripts/helpers/fast-bridge`, which holds the key; tacmon never runs them.
+//! commands for `scripts/helpers/fast-bridge`, which holds the key; tacmon runs none of them as printed. Where the
+//! operator sets `normalize_cmd` it runs that tool's dry run, to learn whether a transaction paid the reverse key silently.
 
 pub mod adapters;
 mod advisor;

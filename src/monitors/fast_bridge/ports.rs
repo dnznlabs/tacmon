@@ -44,6 +44,8 @@ pub trait Chain: Send + Sync {
     fn history<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<ChainTx>>;
     /// One transaction by id. `None`: the explorer answers and does not know it.
     fn tx<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<ChainTx>>;
+    /// Whether an output of a transaction has been spent.
+    fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool>;
     fn outlook(&self) -> Fut<'_, Outlook>;
 }
 
@@ -68,6 +70,13 @@ pub trait LogFeed: Send {
     fn start(self: Box<Self>) -> Receiver<LogEntry>;
 }
 
+/// Whether a transaction paid the reverse key silently, which only that key can tell. Optional: behind it is a tool
+/// that holds the key, in the mode that sends nothing.
+pub trait SilentCheck: Send + Sync {
+    /// The TAC from `txid` waiting at a one-time address of the reverse key. `None`: none of it is this key's to move.
+    fn waiting<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<u128>>;
+}
+
 pub struct Ports {
     pub provider: Arc<dyn Provider>,
     pub board: Arc<dyn Board>,
@@ -80,5 +89,7 @@ pub struct Ports {
     pub pool: Option<Arc<dyn PoolLog>>,
     /// `None`: what needs the key is not shown.
     pub inventory: Option<Arc<dyn Inventory>>,
+    /// `None`: a note that left the main address is never called a silent send.
+    pub silent: Option<Arc<dyn SilentCheck>>,
     pub log: Box<dyn LogFeed>,
 }

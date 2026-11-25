@@ -21,6 +21,13 @@ pub const POOL_SETTLED: u64 = 64;
 /// Ethereum makes a block every twelve seconds, or skips one: never sooner.
 const BLOCK_SECS: u64 = 12;
 
+/// How many of the key's verdicts on notes sent away are kept, oldest out first. The feed and the state keep the
+/// same ones by this rule, so neither forgets a verdict the other still holds.
+pub const SILENT_KEPT: usize = 512;
+/// How deep a transaction must be before the key-holding tool is asked about it: a block on top of its own, so the
+/// tool's explorer has it and a "none of it is this key's" is said of a transaction that is there to read.
+pub const SILENT_DEPTH: u64 = 2;
+
 /// Which of the provider's addresses a transaction pays or spends from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
@@ -246,7 +253,7 @@ mod tests {
         c.to_string().repeat(64)
     }
     fn tx(c: char, height: Option<u64>, received: u64, sent: u64) -> ChainTx {
-        ChainTx { txid: id(c), fee: 430, vsize: 430, height, time: height.map(|h| h * 600), received, sent, note: received == 546 }
+        ChainTx { txid: id(c), fee: 430, vsize: 430, height, time: height.map(|h| h * 600), received, sent, note: received == 546, notes_away: Vec::new() }
     }
     fn swap(n: u64, phase: &str, linked: &[(Role, char)]) -> Swap {
         Swap {
