@@ -22,7 +22,11 @@ run: ## Run tacmon against the services on this machine
 demo: ## Run tacmon on made-up data
 	cargo run --release -- --demo
 
-# AGG_FLAGS: a font with braille for the start screen, e.g. --font-dir <dir> --font-family "DejaVu Sans Mono,DejaVu Sans"
+# AGG_FLAGS: a font with braille for the start screen. Defaults to devbox's DejaVu: Sans Mono for text, Sans for the braille it lacks
+DEVBOX_FONTS := $(wildcard .devbox/nix/profile/default/share/fonts/truetype)
+# in a variable of its own: a comma written inside $(if) would split its arguments
+DEVBOX_FONT_FLAGS = --font-dir $(DEVBOX_FONTS) --font-family "DejaVu Sans Mono,DejaVu Sans"
+AGG_FLAGS ?= $(if $(DEVBOX_FONTS),$(DEVBOX_FONT_FLAGS))
 demo-video: build ## Record docs/demo/demo.gif and demo.mp4 from tacmon --demo (needs python3, agg and ffmpeg)
 	python3 scripts/record-demo.py target/release/tacmon docs/demo/demo.cast
 	agg $(AGG_FLAGS) --font-size 14 --theme monokai --fps-cap 30 docs/demo/demo.cast docs/demo/demo.gif

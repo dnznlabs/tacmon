@@ -254,6 +254,8 @@ pub fn create_demo_ports(now: u64) -> Ports {
                     mined(format!("{}c9d0e1f2", "9".repeat(56)), 9_060, 1_100, 141, (2_300 + 2 * DUST, 0)),
                     mined(take("0a1b2c3d"), 21_000, 2_300, 430, (2 * DUST, 0)),
                     mined(format!("{}9abcdef0", "d".repeat(56)), 30_000, 420, 141, (50_000, 0)),
+                    // TAC sent to the reverse side silently and not moved yet: the key says so, and how much
+                    ChainTx { notes_away: vec![0], ..mined(format!("{}51e57000", "a".repeat(56)), 4_200, 520, 430, (DUST, DUST)) },
                 ],
             ),
             (
@@ -278,7 +280,7 @@ pub fn create_demo_ports(now: u64) -> Ports {
         ],
         outlook: Outlook { tip: TIP, hour_milli: 4_200 },
         spent: Vec::new(),
-        silent: Vec::new(),
+        silent: vec![(format!("{}51e57000", "a".repeat(56)), t(50))],
         eth_tip: ETH_TIP,
         // oldest first, as a node lists them; the swap still locking has none yet
         pool_locks: vec![pool_lock("0a1b2c3d", 21_000), pool_lock("c9d0e1f2", 9_000), pool_lock("a1b2c3d4", 1_300)],

@@ -44,7 +44,9 @@ while it was running.
 
 ## What it would take to show the rest
 
-- **An indexer** (an Etherscan-style API) lists the account's own sends. It needs a key and tells one more party
-  which account is watched, so it would be an opt-in setting.
+- **An indexer** (an Etherscan-style API) lists the account's own sends. Decided against
+  ([#9](https://github.com/dnznlabs/tacmon/issues/9)): it needs a key and tells one more party which account is
+  watched, for a handful of transactions a provider's account sends in its lifetime, none of them a swap's.
 - **The provider recording the hashes it sends** in its swap records would make every one of them a lookup by
-  hash, reverted ones included. That is a change to tacit, not to tacmon.
+  hash, reverted ones included. That is a change to tacit, not to tacmon: asked for upstream, and what tacmon
+  would then build is [#12](https://github.com/dnznlabs/tacmon/issues/12).
