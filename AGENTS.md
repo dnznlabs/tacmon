@@ -8,7 +8,8 @@
 
 `tacmon` is a terminal activity monitor for operators of Tacit services, in the spirit of `htop` and `k9s`: it watches what the operator runs, on the machine it runs on, and is not a view of the network. Two levels: a
 **monitor** per kind of service, then that monitor's **pages**. One monitor exists, `fast-bridge`, for a fast bridge
-liquidity provider. Every monitor is read only: it never sees a service's key and never changes a service.
+liquidity provider. Every monitor is read only: it never sees a service's key and never changes a service. What needs the key, it prints as a
+command for a helper in `scripts/helpers/`.
 
 ## Working Agreements
 
@@ -39,7 +40,9 @@ For anyone changing this repo, human or agent.
 | `src/monitors/fast_bridge/feed.rs` | one task per port, sending events |
 | `src/monitors/fast_bridge/state.rs` | what the pages draw, and what each event does to it |
 | `src/monitors/fast_bridge/advisor.rs` | fee and size arithmetic, pure |
+| `src/monitors/fast_bridge/upkeep.rs` | what keeping the provider stocked takes now, and the commands for it, pure |
 | `src/monitors/fast_bridge/ui.rs` | the header and one function per page |
+| `scripts/helpers/fast-bridge` | runs tacit's upkeep tools with the provider's key: the one file here that handles a key |
 | `scripts/backup-swaps.sh` | snapshots a provider's swap records: the one piece of state a provider cannot lose |
 | `SECURITY.md` | the threat model and the numbered claims the reviews attack |
 | `audits/` | the review method, the scope, the prompts and one directory per past review |
@@ -108,7 +111,11 @@ A change is not done until the documents describing what it changed are updated 
 - `make audit` starts other agents in this tree and refuses to run while `.audit-leg/` exists.
 - Port methods return boxed futures (`ports::Fut`) so the traits stay object-safe; `async fn` in a trait would not be.
 - `Monitor::start` and `LogFeed::start` spawn tasks, so they must be called inside the tokio runtime.
-- The provider's log is read through `journalctl` by default; the swap records need read access to the provider's `dataDir`.
+- The provider's log is read through `journalctl` by default; the swap records need read access to the provider's `dataDir`, `swaps/` and `reverse/swaps/` both.
+- A swap's direction decides its phases, when it counts as paid (reverse: at `claimed`, before the bridger takes the note) and which way `pays` and `gets` run. Use `Swap::paid` and `Swap::closed`, never a phase name.
 - `--snapshot` output has no colour, so a colour-only change cannot be checked with it.
 - `agg` needs a font with braille glyphs or the start screen records blank: pass one in `AGG_FLAGS` (DejaVu Sans Mono has none; DejaVu Sans as a fallback does).
+- A command the Maintenance page prints is built only from values `wire.rs` held to hex, decimal or bech32. A new value in one gets the same check, and a test with shell characters in it.
+- What needs the key comes through the `Inventory` port, behind `status_cmd`: a child process holds the key, tacmon reads its output. Never read `FB_LP_KEY` or the environment file in the crate.
+- tacit's upkeep tools exit silently when started through a symlinked path: the helper `cd`s to the real path first.
 - `config.example.toml` is generated: edit the defaults in the `config.rs` files, not the file.

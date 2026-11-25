@@ -7,6 +7,40 @@ pub const HIGH_FEE_BPS: u64 = 500;
 /// The size fees are compared at, as on the Market page: a flat fee weighs more on a small bridge.
 pub const REFERENCE: u128 = 100 * UNIT;
 
+/// Where the app's high-fee mark falls on the bridges a provider takes. The flat part weighs most on a small
+/// bridge, so the mark can start part way up the size range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flag {
+    Never,
+    Always,
+    /// Bridges under this size are marked; this size and larger are not.
+    Under(u128),
+}
+
+/// The app's own rule (`fee * 10000 > amount * warnFeeBps`), on one bridge.
+fn flagged(amount: u128, bps: u64, flat: u128) -> bool {
+    fee_on(amount, bps, flat).checked_mul(10_000).is_none_or(|f| f > amount.saturating_mul(u128::from(HIGH_FEE_BPS)))
+}
+
+/// The mark across `min..=max`. The fee's share only falls as a bridge grows, so the smallest size decides `Never`,
+/// the largest `Always`, and the edge between them is found by halving.
+pub fn flag(min: u128, max: u128, bps: u64, flat: u128) -> Flag {
+    if min > max || !flagged(min, bps, flat) {
+        return Flag::Never;
+    }
+    if flagged(max, bps, flat) {
+        return Flag::Always;
+    }
+    let (mut low, mut high) = (min, max);
+    while high - low > 1 {
+        let mid = low + (high - low) / 2;
+        if flagged(mid, bps, flat) { low = mid } else { high = mid }
+    }
+    // the app's rounding makes the edge ragged by a base unit or so; to the cent, rounded up, it reads as the size it is
+    let cent = UNIT / 100;
+    Flag::Under(high.div_ceil(cent).saturating_mul(cent).min(max))
+}
+
 /// A fee as the bridger meets it: the share and the flat part together, at the reference size.
 pub fn all_in(bps: u64, flat: u128) -> u64 {
     effective_bps(REFERENCE, bps, flat)
@@ -35,8 +69,8 @@ pub struct FeeRow {
     pub volume: u128,
     pub revenue: u128,
     pub current: bool,
-    /// The app would mark a bridge at this fee as a high fee.
-    pub high: bool,
+    /// Where the app would mark a bridge at this fee as a high fee, over the sizes this provider takes.
+    pub high: Flag,
 }
 
 /// Where the provider's fee stands against the others advertising now. It is about being chosen, not about earning
@@ -99,7 +133,7 @@ pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64], others: Option<&[u6
                 volume: total(fits.iter().map(|w| w.amount)),
                 revenue: total(fits.iter().map(|w| fee_on(w.amount, bps, terms.flat))),
                 current: bps == terms.fee_bps,
-                high: all_in(bps, terms.flat) > HIGH_FEE_BPS,
+                high: flag(terms.min, terms.max, bps, terms.flat),
             }
         })
         .collect();
@@ -257,13 +291,32 @@ mod tests {
     }
 
     #[test]
-    fn a_fee_the_app_would_flag_is_marked_high() {
-        // the flat 0.1 TAC counts: 5.00% is 5.10% all in at 100 TAC
+    fn a_fee_the_app_would_flag_is_marked_high_where_it_would_be() {
+        // the flat 0.1 TAC counts: at 4.90% a 10 TAC bridge is 5.90%, and only bridges under 100 TAC go over 5%
         let t = terms();
 
         let a = advise(&t, &[], &[490, 500], Some(&[]));
 
-        let high: Vec<(u64, bool)> = a.ladder.iter().map(|r| (r.bps, r.high)).collect();
-        assert_eq!(high, [(150, false), (490, false), (500, true)]);
+        let high: Vec<(u64, Flag)> = a.ladder.iter().map(|r| (r.bps, r.high)).collect();
+        assert_eq!(high, [(150, Flag::Never), (490, Flag::Under(100 * UNIT)), (500, Flag::Always)]);
+    }
+
+    #[test]
+    fn a_large_flat_fee_is_not_judged_on_a_bridge_smaller_than_the_minimum() {
+        // 5 TAC flat is 5% of a 100 TAC bridge, but this provider takes nothing under 150
+        let (min, max, flat) = (150 * UNIT, 500 * UNIT, 5 * UNIT);
+
+        let flags = [10, 150, 300].map(|bps| flag(min, max, bps, flat));
+
+        assert_eq!(flags, [Flag::Never, Flag::Never, Flag::Under(250 * UNIT)]);
+    }
+
+    #[test]
+    fn the_edge_is_the_apps_own_rule_to_the_base_unit() {
+        let (min, max, bps, flat) = (1, 1_000 * UNIT, 100, UNIT);
+
+        let Flag::Under(edge) = flag(min, max, bps, flat) else { panic!("an edge") };
+
+        assert!(flagged(edge - UNIT / 100, bps, flat) && !flagged(edge, bps, flat));
     }
 }

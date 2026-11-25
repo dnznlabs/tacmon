@@ -1,7 +1,8 @@
 //! Drawing: the header, and one function per page.
 
+use super::{advisor, upkeep};
 use super::{
-    advisor::{HIGH_FEE_BPS, Standing, all_in},
+    advisor::{Flag, HIGH_FEE_BPS, Standing, all_in},
     model::*,
     state::{Page, State},
 };
@@ -74,6 +75,7 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
     let free = st.free();
     let money = vec![
         vec![
+            Span::styled("forward  ", bold),
             label("free "),
             // a figure nothing has given yet is a dash, never a zero
             match free {
@@ -98,22 +100,58 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
             ),
         ],
         // the same rule for what comes from the swap records
-        vec![label("│  on Bitcoin: received "), if st.swaps_known() { Span::styled(tac(st.received()), bold) } else { dash() }],
-        vec![label("incoming "), if st.swaps_known() { Span::styled(tac(st.incoming()), bold) } else { dash() }],
-        vec![label("│  fees earned "), if st.swaps_known() { Span::styled(tac(st.earned()), bold.fg(th.accent)) } else { dash() }],
+        vec![label("│  on Bitcoin: received "), if st.swaps_known() { Span::styled(tac(st.received(Direction::Forward)), bold) } else { dash() }],
+        vec![label("incoming "), if st.swaps_known() { Span::styled(tac(st.incoming(Direction::Forward)), bold) } else { dash() }],
+        vec![label("│  fees earned "), if st.swaps_known() { Span::styled(tac(st.earned(Direction::Forward)), bold.fg(th.accent)) } else { dash() }],
         // the records could be read once and cannot be now: the three figures before this are the last read
         if st.swaps_known() && !st.swaps_ok { vec![Span::styled("(records not read: last known)", Style::new().fg(th.bad))] } else { vec![] },
     ];
+    let on = st.reverse_terms();
+    let mut reverse = vec![vec![
+        Span::styled("reverse  ", bold),
+        // off and not answering are each said as such: neither is a side with nothing to sell
+        match &st.reverse {
+            Some(ReverseSide::On { .. }) => Span::styled("on", Style::new().fg(th.good)),
+            Some(ReverseSide::Off) => Span::styled("off", th.dim()),
+            None if st.reverse_ok => dash(),
+            None => Span::styled("?", th.dim()),
+        },
+        if !st.reverse_ok && st.healthy.is_some() {
+            Span::styled(
+                if st.reverse.is_some() { " (/reverse/info not answering: last known)" } else { " (/reverse/info does not answer)" },
+                Style::new().fg(th.bad),
+            )
+        } else {
+            Span::raw("")
+        },
+    ]];
+    if let (Some(t), Some(ReverseSide::On { open, max_open, .. })) = (on, &st.reverse) {
+        reverse.push(vec![
+            label("can take "),
+            match t.available {
+                Some(a) => Span::styled(tac(a), bold.fg(if a < t.min { th.warn } else { th.good })),
+                // the provider could not read the notes at its address
+                None => dash(),
+            },
+            label(" pool TAC"),
+        ]);
+        reverse.push(vec![label("open "), Span::raw(format!("{}/{max_open}", open.map_or_else(|| "?".into(), |o| o.to_string())))]);
+    }
+    if on.is_some() || st.has_reverse_swaps() {
+        reverse
+            .push(vec![label("│  in the pool: received "), if st.swaps_known() { Span::styled(tac(st.received(Direction::Reverse)), bold) } else { dash() }]);
+        reverse.push(vec![label("incoming "), if st.swaps_known() { Span::styled(tac(st.incoming(Direction::Reverse)), bold) } else { dash() }]);
+        reverse
+            .push(vec![label("│  fees earned "), if st.swaps_known() { Span::styled(tac(st.earned(Direction::Reverse)), bold.fg(th.accent)) } else { dash() }]);
+    }
     let status = vec![
         vec![light(st.healthy, th), label(" health")],
         // unknown, not red, while the board itself is not answering
         vec![light(st.on_board(), th), label(" on board")],
         if st.ad_contested() { vec![Span::styled("an ad that is not yours uses your key", Style::new().fg(th.bad))] } else { vec![] },
         vec![light(Some(st.swaps_ok), th), label(" records")],
-        vec![match &st.terms {
-            Some(t) => Span::raw(format!("fee {} + {} · takes {} to {} TAC", pct(t.fee_bps), tac(t.flat), tac(t.min), tac(t.max))),
-            None => Span::styled("the provider does not answer /info", Style::new().fg(th.bad)),
-        }],
+        // the terms are on the Advisor and Maintenance pages; here only whether they can be read
+        if st.terms.is_none() { vec![Span::styled("the provider does not answer /info", Style::new().fg(th.bad))] } else { vec![] },
         if st.id.dry_run { vec![Span::styled("DRY RUN", Style::new().fg(th.warn))] } else { vec![] },
     ];
     let places = vec![
@@ -133,7 +171,7 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
         },
         if st.healthy == Some(false) && !st.health_error.is_empty() { vec![Span::styled(st.health_error.clone(), Style::new().fg(th.bad))] } else { vec![] },
     ];
-    [money, status, places].into_iter().flat_map(|row| flow(row, width)).collect()
+    [money, reverse, status, places].into_iter().flat_map(|row| flow(row, width)).collect()
 }
 
 pub fn header(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
@@ -147,15 +185,17 @@ pub fn page(f: &mut Frame, area: Rect, page: Page, st: &State, th: &Theme) {
         Page::Demand => demand(f, area, st, th),
         Page::Market => market(f, area, st, th),
         Page::Advisor => advisor(f, area, st, th),
+        Page::Maintenance => maintenance(f, area, st, th),
     }
 }
 
 /// "●●●○○○ locked": how far along the six steps a swap is.
 fn pipeline(s: &Swap, th: &Theme) -> Line<'static> {
-    let (dots, color) = match PHASES.iter().position(|p| *p == s.phase) {
-        Some(i) => (format!("{}{}", "●".repeat(i + 1), "○".repeat(PHASES.len() - i - 1)), if s.done() { th.good } else { th.accent }),
-        // refunding, refunded, rejected, aborted: off the happy path
-        None => ("✕".repeat(PHASES.len()), th.warn),
+    let phases = s.direction.phases();
+    let (dots, color) = match phases.iter().position(|p| *p == s.phase) {
+        Some(i) => (format!("{}{}", "●".repeat(i + 1), "○".repeat(phases.len() - i - 1)), if i + 1 == phases.len() { th.good } else { th.accent }),
+        // refunding, refunded, rejected, aborted, refund-wait, counter-took: off the happy path
+        None => ("✕".repeat(phases.len()), th.warn),
     };
     Line::from(vec![Span::styled(dots, Style::new().fg(color)), Span::raw(format!(" {}", s.phase))])
 }
@@ -174,6 +214,7 @@ fn overview(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             };
             Row::new(vec![
                 Cell::from(short(&s.id, 8, 4)),
+                Cell::from(s.direction.label()).style(if s.direction == Direction::Reverse { Style::new().fg(th.accent) } else { th.dim() }),
                 Cell::from(pipeline(s, th)),
                 right(tac(s.pays)),
                 right(tac(s.gets)),
@@ -185,11 +226,17 @@ fn overview(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             ])
         })
         .collect();
-    let open = st.swaps.iter().filter(|s| !s.closed()).count();
-    let title = format!(" Swaps · {open} open · {} done ", st.swaps.iter().filter(|s| s.done()).count());
+    let done = |d| st.swaps.iter().filter(|s| s.direction == d && s.paid()).count();
+    let forward = format!("forward {} open · {} done", st.open(Direction::Forward), done(Direction::Forward));
+    let title = if st.has_reverse_swaps() || st.reverse_terms().is_some() {
+        format!(" Swaps · {forward} · reverse {} open · {} paid ", st.open(Direction::Reverse), done(Direction::Reverse))
+    } else {
+        format!(" Swaps · {forward} ")
+    };
     let widths = [
         Constraint::Length(13),
-        Constraint::Length(16),
+        Constraint::Length(8),
+        Constraint::Length(17),
         Constraint::Length(12),
         Constraint::Length(12),
         Constraint::Length(9),
@@ -200,7 +247,7 @@ fn overview(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     f.render_widget(
         table(
             title,
-            &["SWAP", "PHASE", "PAYS (BTC)", "GETS (POOL)", "FEE", "AGE", "DEADLINE", "LOCK TX"],
+            &["SWAP", "WAY", "PHASE", "        PAYS", "        GETS", "FEE", "AGE", "DEADLINE", "LOCK TX"],
             window(rows, st.scroll[Page::Overview as usize]),
             &widths,
             th,
@@ -270,7 +317,7 @@ fn demand(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let total = total(st.wants.iter().map(|w| w.amount));
     let takeable = st.wants.iter().filter(|w| st.blocker(w) == Some(None)).count();
     let title = if st.board_ok {
-        format!(" Bridgers waiting · {} · {} TAC · {takeable} you can take{} ", st.wants.len(), tac(total), others(st.other_wants))
+        format!(" Bridgers waiting, Bitcoin to pool · {} · {} TAC · {takeable} you can take{} ", st.wants.len(), tac(total), others(st.other_wants))
     } else {
         " Bridgers waiting · the board does not answer ".to_string()
     };
@@ -279,25 +326,31 @@ fn demand(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
 }
 
 fn market(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
-    let rows: Vec<Row> = st
-        .ads
+    let dir = st.market_dir;
+    let listed = st.market(dir);
+    let rows: Vec<Row> = listed
         .iter()
-        .map(|a| {
+        .map(|&(a, t)| {
             // the ad this provider's own terms pick out, not every ad that names its key
             let me = st.my_ad().is_some_and(|mine| std::ptr::eq(mine, a));
-            let t = &a.terms;
             let avail = match t.available {
                 Some(0) => right("full".into()).style(th.dim()),
                 Some(v) => right(tac(v)),
                 None => right("?".into()),
             };
             // the provider's own default name: "Provider" and the first six hex digits after the key's prefix byte
+            // the fee a bridge of this size would pay; dimmed where the provider does not take one that size
+            let at = |size: u128| {
+                let cell = right(pct(effective_bps(size, t.fee_bps, t.flat)));
+                if (t.min..=t.max).contains(&size) { cell } else { cell.style(th.dim()) }
+            };
             let name = if a.name.is_empty() { format!("Provider {}", a.claim_pub.get(2..8).unwrap_or("")) } else { a.name.clone() };
             let row = Row::new(vec![
                 Cell::from(format!("{}{name}", if me { "▶ " } else { "  " })),
                 right(pct(t.fee_bps)),
                 right(tac(t.flat)),
-                right(pct(effective_bps(100 * UNIT, t.fee_bps, t.flat))),
+                at(100 * UNIT),
+                at(1000 * UNIT),
                 right(format!("{} – {}", tac(t.min), tac(t.max))),
                 avail,
                 Cell::from(format!("{}{}", if a.any_tac { "any TAC" } else { "home only" }, if a.reverse { " · reverse" } else { "" })),
@@ -305,16 +358,21 @@ fn market(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             if me { row.style(Style::new().fg(th.accent).add_modifier(Modifier::BOLD)) } else { row }
         })
         .collect();
+    let way = match dir {
+        Direction::Forward => "Bitcoin to pool",
+        Direction::Reverse => "pool to Bitcoin",
+    };
     let title = if st.ads_ok {
-        format!(" Providers on the board · {} · cheapest first at 100 TAC{} ", st.ads.len(), others(st.other_ads))
+        format!(" Providers on the board · {way} · {} · cheapest first at 100 TAC{} ", listed.len(), others(st.other_ads))
     } else {
-        format!(" Providers on the board · {} · THE BOARD DOES NOT ANSWER: last known ", st.ads.len())
+        format!(" Providers on the board · {way} · {} · THE BOARD DOES NOT ANSWER: last known ", listed.len())
     };
     let widths = [
         Constraint::Length(24),
         Constraint::Length(7),
         Constraint::Length(8),
         Constraint::Length(9),
+        Constraint::Length(10),
         Constraint::Length(26),
         Constraint::Length(12),
         Constraint::Fill(1),
@@ -322,7 +380,7 @@ fn market(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     f.render_widget(
         table(
             title,
-            &["  NAME", "    FEE", "    FLAT", " @100 TAC", "               TAKES (TAC)", "   AVAILABLE", "ACCEPTS"],
+            &["  NAME", "    FEE", "    FLAT", " @100 TAC", "@1000 TAC", "               TAKES (TAC)", "   AVAILABLE", "ACCEPTS"],
             window(rows, st.scroll[Page::Market as usize]),
             &widths,
             th,
@@ -336,7 +394,7 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         f.render_widget(Paragraph::new("Waiting for the provider's terms (/info).").block(panel(" Advisor ".into(), th)), area);
         return;
     };
-    let [left, right_pane] = Layout::horizontal([Constraint::Length(74), Constraint::Min(30)]).areas(area);
+    let [left, right_pane] = Layout::horizontal([Constraint::Length(78), Constraint::Min(30)]).areas(area);
     let rows: Vec<Row> = adv
         .ladder
         .iter()
@@ -344,18 +402,24 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             // the mark is for the fee that gets chosen, never for the one that earns most: the rows show what each
             // fee would look like, and a high one is named as what the app would call it
             let matches = Some(r.bps) == adv.competitive_bps;
-            let mark = match (r.current, matches, r.high) {
-                (true, _, true) => "▶ yours · flagged as a high fee",
-                (true, true, _) => "▶ yours · competitive",
-                (true, false, _) => "▶ yours",
-                (false, _, true) => "flagged as a high fee",
-                (false, true, _) => "★ matches the cheapest",
-                _ => "",
+            let high = match r.high {
+                Flag::Never => None,
+                Flag::Always => Some("high fee".to_string()),
+                Flag::Under(size) => Some(format!("high fee under {}", tac(size))),
+            };
+            let mark = match (r.current, matches, &high) {
+                (true, _, Some(h)) => format!("▶ yours · {h}"),
+                (true, true, None) => "▶ yours · competitive".into(),
+                (true, false, None) => "▶ yours".into(),
+                (false, _, Some(h)) => h.clone(),
+                (false, true, None) => "★ matches the cheapest".into(),
+                _ => String::new(),
             };
             let row = Row::new(vec![right(pct(r.bps)), right(r.count.to_string()), right(tac(r.volume)), right(tac(r.revenue)), Cell::from(mark)]);
+            // dimmed only when every bridge it would take is marked: one marked on small bridges is still a fee to weigh
             match (r.current, matches, r.high) {
-                (true, _, _) => row.style(Style::new().fg(if r.high { th.warn } else { th.accent }).add_modifier(Modifier::BOLD)),
-                (_, _, true) => row.style(th.dim()),
+                (true, _, _) => row.style(Style::new().fg(if high.is_some() { th.warn } else { th.accent }).add_modifier(Modifier::BOLD)),
+                (_, _, Flag::Always) => row.style(th.dim()),
                 (_, true, _) => row.style(Style::new().fg(th.good)),
                 _ => row,
             }
@@ -365,9 +429,9 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     f.render_widget(
         table(
             if st.board_ok && st.ads_ok {
-                " Fee against what is waiting now ".into()
+                " Forward fee against what is waiting now ".into()
             } else {
-                " Fee against what was waiting · THE BOARD DOES NOT ANSWER ".into()
+                " Forward fee against what was waiting · THE BOARD DOES NOT ANSWER ".into()
             },
             &["    FEE", "BRIDGES", "      VOLUME", " WOULD EARN", ""],
             rows,
@@ -380,7 +444,7 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     let free = st.free();
     let head = |s: &'static str| Line::from(Span::styled(s, Style::new().fg(th.accent).add_modifier(Modifier::BOLD)));
     let faint = |s: &'static str| Line::from(Span::styled(s, th.dim()));
-    let mut out = vec![head("Fee")];
+    let mut out = vec![head("Forward fee (Bitcoin to pool)")];
     let own = all_in(t.fee_bps, t.flat);
     out.push(Line::from(format!("  You charge {} all in on a 100 TAC bridge ({} + {} flat).", pct(own), pct(t.fee_bps), tac(t.flat))));
     // whose word the comparison rests on: the board signs nothing, so the name is there for the operator to judge
@@ -405,13 +469,48 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         out.push(Line::from(Span::styled("  The board's ads could not be read: this is against the last known ones.", Style::new().fg(th.bad))));
     }
     out.push(faint("  Ads are unsigned: anyone can post one. Check a rival is real on the Market page."));
-    out.push(faint("  A bridger is offered the cheaper provider, so being chosen comes before"));
-    out.push(faint("  earning more per bridge. The table shows what each fee would earn."));
-    if own > HIGH_FEE_BPS {
+    out.push(faint(
+        "  A bridger is offered the cheaper provider, so being chosen comes before earning more per bridge. The table shows what each fee would earn.",
+    ));
+    let marked = match advisor::flag(t.min, t.max, t.fee_bps, t.flat) {
+        Flag::Never => None,
+        Flag::Always => Some("every bridge you take".to_string()),
+        Flag::Under(size) => Some(format!("your bridges under {} TAC", tac(size))),
+    };
+    if let Some(which) = marked {
         out.push(Line::from(Span::styled(
-            format!("  Over {} all in, the app marks a bridge as a high fee. Yours is.", pct(HIGH_FEE_BPS)),
+            format!("  The app marks a fee over {} of a bridge as high: at yours, that is {which}.", pct(HIGH_FEE_BPS)),
             Style::new().fg(th.bad),
         )));
+    }
+    out.extend([Line::from(""), head("Reverse fee (pool to Bitcoin)")]);
+    match (st.reverse_terms(), st.reverse_standing()) {
+        (Some(rt), Some((standing, name))) => {
+            out.push(Line::from(format!(
+                "  You charge {} all in on a 100 TAC send ({} + {} flat).",
+                pct(all_in(rt.fee_bps, rt.flat)),
+                pct(rt.fee_bps),
+                tac(rt.flat)
+            )));
+            let who = name.filter(|n| !n.is_empty()).map(|n| format!(" ({})", n.chars().take(24).collect::<String>())).unwrap_or_default();
+            out.push(match standing {
+                Standing::Unknown => {
+                    Line::from(Span::styled("  The board's ads have not been read yet, so there is nothing to compare with.", Style::new().fg(th.warn)))
+                }
+                Standing::Alone => Line::from("  No other provider that could take the same sends lists reverse terms."),
+                Standing::Cheapest { next } => Line::from(Span::styled(
+                    format!("  That is the cheapest on the board (the next{who} is {}). Keep it.", pct(next)),
+                    Style::new().fg(th.good),
+                )),
+                Standing::Dearer { cheapest, .. } => {
+                    Line::from(Span::styled(format!("  The cheapest other{who} charges {}.", pct(cheapest)), Style::new().fg(th.warn)))
+                }
+            });
+        }
+        _ => out.push(faint(match st.reverse {
+            Some(ReverseSide::Off) => "  The reverse side is off.",
+            _ => "  The reverse side's terms are not known (/reverse/info).",
+        })),
     }
     out.extend([Line::from(""), head("Size")]);
     if adv.over_count > 0 {
@@ -448,6 +547,191 @@ fn advisor(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     f.render_widget(Paragraph::new(out).wrap(Wrap { trim: false }).block(panel(" Suggestions ".into(), th)), right_pane);
 }
 
+/// `last` when the last read failed: what is drawn is the last known.
+fn read_note(ok: bool, ever: bool) -> &'static str {
+    match (ok, ever) {
+        (true, _) => "",
+        (false, true) => " · NOT ANSWERING: last known",
+        (false, false) => " · not read yet",
+    }
+}
+
+fn maintenance(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
+    let up = st.upkeep();
+    let [left, right_pane] = Layout::horizontal([Constraint::Min(60), Constraint::Length(52)]).areas(area);
+    let head = |s: &'static str| Line::from(Span::styled(s, Style::new().fg(th.accent).add_modifier(Modifier::BOLD)));
+    let label = |s: &'static str| Span::styled(s, th.dim());
+    let dash = || Span::styled("—", th.dim());
+
+    let mut out = vec![head("Forward side (Bitcoin to pool)")];
+    out.push(Line::from(vec![
+        label("  status "),
+        match st.healthy {
+            Some(true) => Span::styled("on", Style::new().fg(th.good)),
+            Some(false) => Span::styled("its last tick failed", Style::new().fg(th.bad)),
+            None => Span::styled("the provider does not answer /health", Style::new().fg(th.bad)),
+        },
+        label("   pool account "),
+        if st.id.pool_account.is_empty() { dash() } else { Span::raw(st.id.pool_account.clone()) },
+    ]));
+    out.push(Line::from(match &st.terms {
+        Some(t) => vec![
+            label("  can lend "),
+            st.free().map_or_else(dash, |f| Span::styled(tac(f), Style::new().add_modifier(Modifier::BOLD).fg(if f < t.min { th.warn } else { th.good }))),
+            label(" pool TAC now · takes "),
+            Span::raw(format!("{} to {}", tac(t.min), tac(t.max))),
+            label(" · fee "),
+            Span::raw(format!("{} + {}", pct(t.fee_bps), tac(t.flat))),
+            label(" · open "),
+            Span::raw(st.open(Direction::Forward).to_string()),
+        ],
+        None => vec![label("  terms "), Span::styled("the provider does not answer /info", Style::new().fg(th.bad))],
+    }));
+    out.push(Line::from(vec![label("  main address "), if st.id.bitcoin_address.is_empty() { dash() } else { Span::raw(st.id.bitcoin_address.clone()) }]));
+    out.push(Line::from(if st.explorer {
+        vec![
+            label("  at the address "),
+            if st.main_coins.is_some() {
+                Span::raw(format!("{} TAC from {} forward takes", tac(total(up.notes.iter().map(|n| n.tac))), up.notes.len()))
+            } else {
+                dash()
+            },
+            label(" · "),
+            if st.main_coins.is_some() { Span::raw(format!("{} sats in plain coins", up.coins.iter().map(|c| c.sats).sum::<u64>())) } else { dash() },
+            Span::styled(read_note(st.main_coins_ok, st.main_coins.is_some()), Style::new().fg(th.bad)),
+        ]
+    } else {
+        vec![label("  at the address "), dash(), label(" · set fast_bridge.btc_explorer to list its coins")]
+    }));
+    out.extend([Line::from(""), head("Reverse side (pool to Bitcoin)")]);
+    out.push(Line::from(vec![
+        label("  status "),
+        match (&st.reverse, st.reverse_ok) {
+            (Some(ReverseSide::On { .. }), _) => Span::styled("on", Style::new().fg(th.good)),
+            (Some(ReverseSide::Off), _) => Span::styled("off", Style::new().fg(th.warn)),
+            (None, _) => Span::styled("the provider does not answer /reverse/info", Style::new().fg(th.bad)),
+        },
+        if st.reverse.is_some() && !st.reverse_ok { Span::styled(" (last known)", Style::new().fg(th.bad)) } else { Span::raw("") },
+        label("   address "),
+        if st.reverse_address.is_empty() { dash() } else { Span::raw(st.reverse_address.clone()) },
+    ]));
+    if let Some(ReverseSide::On { terms, open, max_open }) = &st.reverse {
+        out.push(Line::from(vec![
+            label("  can take "),
+            terms.available.map_or_else(dash, |a| Span::styled(tac(a), Style::new().add_modifier(Modifier::BOLD))),
+            label(" pool TAC now · takes "),
+            Span::raw(format!("{} to {}", tac(terms.min), tac(terms.max))),
+            label(" · fee "),
+            Span::raw(format!("{} + {}", pct(terms.fee_bps), tac(terms.flat))),
+            label(" · open "),
+            Span::raw(format!("{}/{max_open}", open.map_or_else(|| "?".into(), |o| o.to_string()))),
+        ]));
+    }
+    out.push(Line::from(vec![
+        label("  at the address "),
+        up.reverse_sats.map_or_else(dash, |s| Span::raw(format!("{s} sats"))),
+        label(" · "),
+        up.reverse_notes.map_or_else(dash, |n| Span::raw(format!("{n} note-sized output{}", if n == 1 { "" } else { "s" }))),
+        label(if st.shows_stock { "" } else { " · their TAC takes the key: set fast_bridge.status_cmd, or run scripts/helpers/fast-bridge status" }),
+        Span::styled(
+            if st.explorer && !st.reverse_address.is_empty() { read_note(st.reverse_coins_ok, st.reverse_coins.is_some()) } else { "" },
+            Style::new().fg(th.bad),
+        ),
+    ]));
+    if st.shows_stock {
+        let mut line = vec![label("  TAC on Bitcoin ")];
+        match st.reverse_stock() {
+            Some(s) => {
+                line.push(Span::styled(tac(s.tac), Style::new().add_modifier(Modifier::BOLD)));
+                line.push(Span::styled(format!(" in {} note{}", s.notes, if s.notes == 1 { "" } else { "s" }), th.dim()));
+                let age = dur(st.now.saturating_sub(st.stock_at));
+                line.push(if st.stock_ok {
+                    Span::styled(format!(" (status, {age} ago)"), th.dim())
+                } else {
+                    Span::styled(format!(" (status, {age} ago: last known, the last run failed)"), Style::new().fg(th.bad))
+                });
+            }
+            None => {
+                line.push(dash());
+                line.push(match (&st.stock, st.stock_ok) {
+                    (Some(_), _) => Span::styled(" (status read another address)", Style::new().fg(th.warn)),
+                    (None, true) => Span::raw(""),
+                    (None, false) => Span::styled(" (status has not answered yet: a run takes about a minute)", th.dim()),
+                });
+            }
+        }
+        out.push(Line::from(line));
+    }
+    out.extend([Line::from(""), head("To do")]);
+    let picked = st.picked();
+    let mut nth = 0;
+    for s in &up.steps {
+        let (mark, color) = match s.level {
+            Level::Info => ("· ", th.dim),
+            Level::Warn => ("▲ ", th.warn),
+            Level::Alert => ("✖ ", th.bad),
+        };
+        out.push(Line::from(vec![Span::styled(mark, Style::new().fg(color)), Span::raw(s.text.clone())]));
+        let last = s.cmd.len().saturating_sub(1);
+        // the picked command is marked by shape as well as colour, so it reads in a snapshot too
+        let this = !s.cmd.is_empty() && picked == Some(nth);
+        nth += usize::from(!s.cmd.is_empty());
+        let style = if this { Style::new().fg(th.accent).add_modifier(Modifier::BOLD | Modifier::REVERSED) } else { Style::new().fg(th.accent) };
+        for (i, c) in s.cmd.iter().enumerate() {
+            let lead = if this && i == 0 { "▶ " } else { "  " };
+            let line = if i < last { format!("{lead}{c} \\") } else { format!("{lead}{c}") };
+            out.push(Line::from(Span::styled(line, style)));
+        }
+        out.push(Line::from(""));
+    }
+    out.push(Line::from(Span::styled(
+        "  shift+↑↓ (or K and J) picks a command and c copies it. Every command that sends is a dry run first: run it again with --send --confirm <the token it printed>.",
+        th.dim(),
+    )));
+    let scroll = u16::try_from(st.scroll[Page::Maintenance as usize]).unwrap_or(u16::MAX);
+    // wrapped, never cut: a figure or an id that runs off the edge reads as a different one
+    f.render_widget(Paragraph::new(out).wrap(Wrap { trim: false }).scroll((scroll, 0)).block(panel(" Maintenance ".into(), th)), left);
+
+    let [notes_area, coins_area] = Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(right_pane);
+    let unread = |what: &str| format!(" {what} · set fast_bridge.btc_explorer ");
+    let notes: Vec<Row> = up
+        .notes
+        .iter()
+        .map(|n| {
+            Row::new(vec![
+                right(tac(n.tac)),
+                if n.created == 0 { Cell::from("—") } else { Cell::from(dur(st.now.saturating_sub(n.created))) },
+                Cell::from(format!("{}:{}", short(&n.txid, 8, 4), n.vouts.iter().map(u32::to_string).collect::<Vec<_>>().join("/"))),
+            ])
+        })
+        .collect();
+    let title = if st.explorer {
+        format!(" TAC from forward takes · {} TAC{} ", tac(total(up.notes.iter().map(|n| n.tac))), read_note(st.main_coins_ok, st.main_coins.is_some()))
+    } else {
+        unread("TAC from forward takes")
+    };
+    let widths = [Constraint::Length(12), Constraint::Length(7), Constraint::Fill(1)];
+    f.render_widget(table(title, &["         TAC", "AGE", "NOTE (ONE OF)"], notes, &widths, th), notes_area);
+
+    let coins: Vec<Row> = up
+        .coins
+        .iter()
+        .map(|c| {
+            let fits = match (upkeep::FUND_COIN.contains(&c.sats), upkeep::TOPUP_COIN.contains(&c.sats)) {
+                (true, true) => "fund, topup",
+                (true, false) => "fund",
+                (false, true) => "topup",
+                (false, false) => "",
+            };
+            Row::new(vec![right(c.sats.to_string()), Cell::from(format!("{}:{}", short(&c.txid, 8, 4), c.vout)), Cell::from(fits)])
+        })
+        .collect();
+    let title =
+        if st.explorer { format!(" Plain sats at the main address{} ", read_note(st.main_coins_ok, st.main_coins.is_some())) } else { unread("Plain sats") };
+    let widths = [Constraint::Length(9), Constraint::Length(18), Constraint::Fill(1)];
+    f.render_widget(table(title, &["     SATS", "COIN", "FOR"], coins, &widths, th), coins_area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,12 +743,12 @@ mod tests {
 
     #[test]
     fn a_narrow_header_takes_more_lines_and_never_cuts_a_figure() {
-        let (st, th) = (State::new(&FastBridgeConfig::default(), true), Theme::from_config(&ThemeConfig::default()));
+        let (st, th) = (State::new(&FastBridgeConfig::default(), true, false, false), Theme::from_config(&ThemeConfig::default()));
 
         let (wide, narrow) = (header_lines(&st, &th, 200), header_lines(&st, &th, 60));
 
-        assert_eq!(wide.len(), 3);
-        assert!(narrow.len() > 3);
+        assert_eq!(wide.len(), 4);
+        assert!(narrow.len() > 4);
         assert!(narrow.iter().all(|l| l.width() <= 60), "{:?}", text(&narrow));
         let figures = |lines: &[Line]| text(lines).concat().replace([' ', '│'], "");
         assert_eq!(figures(&wide), figures(&narrow));

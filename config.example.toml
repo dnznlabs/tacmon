@@ -24,12 +24,17 @@ log_cmd = [
 ]
 eth_rpc = ""
 pool_account = ""
+btc_explorer = ""
+reverse_address = ""
+status_cmd = []
 
 [fast_bridge.refresh]
 lp_secs = 5
 board_secs = 20
 files_secs = 5
 eth_secs = 60
+chain_secs = 120
+status_secs = 300
 
 [fast_bridge.advisor]
 fee_ladder_bps = [

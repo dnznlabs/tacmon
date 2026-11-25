@@ -10,7 +10,7 @@
 #
 # Not listed, each with its reason:
 #   Cargo.lock        322 packages; cargo-deny reads it against RustSec, a model reading it adds nothing
-#   scripts/, mk/     development tooling, never part of the binary
+#   scripts/, mk/     development tooling, never part of the binary, except the one script below that handles a key
 #   docs/             recordings
 
 SECURITY.md
@@ -32,9 +32,11 @@ src/monitors/fast_bridge/mod.rs
 src/monitors/fast_bridge/ports.rs
 src/monitors/fast_bridge/state.rs
 src/monitors/fast_bridge/ui.rs
+src/monitors/fast_bridge/upkeep.rs
 src/monitors/mod.rs
 src/shell/mod.rs
 src/shell/monitor.rs
 src/shell/splash.rs
 src/shell/theme.rs
 src/shell/widgets.rs
+scripts/helpers/fast-bridge

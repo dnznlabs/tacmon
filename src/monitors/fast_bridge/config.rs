@@ -17,6 +17,14 @@ pub struct FastBridgeConfig {
     pub eth_rpc: String,
     /// The pool account, when it should not be learned from the log.
     pub pool_account: String,
+    /// An Esplora API (`https://mempool.space/api`) to read the coins at the provider's Bitcoin addresses from.
+    /// Empty: not read, and the addresses are sent nowhere.
+    pub btc_explorer: String,
+    /// The reverse side's Bitcoin address, for before the side is on: the log names it once it is.
+    pub reverse_address: String,
+    /// A command that prints what is at the reverse address, read with the provider's key:
+    /// `["/path/to/tacmon/scripts/helpers/fast-bridge", "status"]`. Empty: not run. tacmon reads its output, never the key.
+    pub status_cmd: Vec<String>,
     pub refresh: Refresh,
     pub advisor: Advisor,
 }
@@ -28,6 +36,8 @@ pub struct Refresh {
     pub board_secs: u64,
     pub files_secs: u64,
     pub eth_secs: u64,
+    pub chain_secs: u64,
+    pub status_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +59,9 @@ impl Default for FastBridgeConfig {
             log_cmd: ["journalctl", "-u", "tacit-fastbridge-lp", "-o", "cat", "-f", "-n", "2000"].map(String::from).to_vec(),
             eth_rpc: String::new(),
             pool_account: String::new(),
+            btc_explorer: String::new(),
+            reverse_address: String::new(),
+            status_cmd: Vec::new(),
             refresh: Refresh::default(),
             advisor: Advisor::default(),
         }
@@ -57,7 +70,7 @@ impl Default for FastBridgeConfig {
 
 impl Default for Refresh {
     fn default() -> Self {
-        Self { lp_secs: 5, board_secs: 20, files_secs: 5, eth_secs: 60 }
+        Self { lp_secs: 5, board_secs: 20, files_secs: 5, eth_secs: 60, chain_secs: 120, status_secs: 300 }
     }
 }
 

@@ -6,7 +6,7 @@ by **Ðenizen.** // dxnzn.wei
 
 `tacmon` is for operators: it watches the services **you run** for [Tacit](https://tacit.finance), on the machine you run them on, in the spirit of `htop` and `k9s`. It is not a way to watch Tacit in general: without a service of your own beside it, it has nothing to show. See [Who It Is For](#who-it-is-for).
 
-It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there is one monitor, `fast-bridge`, for a fast bridge liquidity provider. It is read only: it never sees a service's key and never changes a service.
+It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there is one monitor, `fast-bridge`, for a fast bridge liquidity provider. It is read only: it never sees a service's key and never changes a service. Where keeping a service stocked needs the key, it prints the command and a separate helper runs it ([Maintenance](#maintenance)).
 
 ![tacmon running on its demo data: the start screen, then each page of the fast bridge monitor](docs/demo/demo.gif)
 
@@ -41,7 +41,7 @@ Alpha software. No warranty. What `tacmon` shows is read from a provider's log, 
 
 ### Fast Bridge
 
-For one fast bridge liquidity provider. It reads the provider's log (`journalctl` by default), its local API (`/info`, `/health`), its swap records, and the public board.
+For one fast bridge liquidity provider. It reads the provider's log (`journalctl` by default), its local API (`/info`, `/health`, `/reverse/info`), its swap records in both directions, and the public board.
 
 #### What It Assumes
 
@@ -64,13 +64,16 @@ What a missing piece looks like: a red cross beside `health` (the API does not a
 
 | KEY | PAGE | SHOWS |
 |:---|:---|:---|
-| `1` | Overview | open and finished swaps (phase, amounts, fee, deadline), latest warnings |
+| `1` | Overview | open and finished swaps of both directions (way, phase, amounts, fee, deadline), latest warnings |
 | `2` | Activity | the provider's log as a feed; `w` for warnings only |
 | `3` | Demand | bridgers waiting on the board, and why you are or are not taking each |
-| `4` | Market | every provider on the board, cheapest first |
-| `5` | Advisor | fee and size against what is waiting now |
+| `4` | Market | every provider on the board, cheapest first; `d` switches between the forward terms and the reverse ones |
+| `5` | Advisor | the forward fee and size against what is waiting now, and the reverse fee against other providers' |
+| `6` | Maintenance | each direction's state, terms and what is at its address, the TAC forward swaps left at the main address, and what to do next, as commands |
 
-The header is on every page: TAC free / promised / held, TAC on Bitcoin (received, incoming), fees earned, health, whether your ad is on the board, and your terms.
+The header is on every page, one line per direction. Forward: TAC free / promised / held, TAC on Bitcoin received and incoming, fees earned. Reverse: on, off or not answering, the pool TAC it can take now, open sends, pool TAC received and incoming, fees earned. Then health, whether your ad is on the board, and whether the swap records can be read. The terms of each direction are on the Advisor and Maintenance pages.
+
+A provider sells in both directions once its reverse side is on (`FB_LP_REVERSE=on`). Forward is a bridger's TAC on Bitcoin for pool TAC; reverse is pool TAC for a TAC note on Bitcoin, from the reverse side's own address. tacmon reads the reverse side's terms from `/reverse/info` and its swaps from `dataDir/reverse/swaps/`.
 
 ## Usage
 
@@ -90,11 +93,36 @@ Optional: `~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.t
 
 `fast_bridge.eth_rpc` is empty by default, so the pool account is sent to no RPC and its ETH balance is not shown. Set a URL to show it.
 
+`fast_bridge.btc_explorer` is empty by default too, so the provider's Bitcoin addresses are sent nowhere and the Maintenance page lists no coins. Set an Esplora API (`https://mempool.space/api`) to list them. `fast_bridge.reverse_address` names the reverse side's address before the side is on; once it is, the log names it.
+
+### Maintenance
+
+The provider's two directions stock each other. Forward swaps take TAC on Bitcoin at its main address and pay pool TAC; the reverse side, once on, sells TAC on Bitcoin from an address of its own and takes pool TAC. Pool TAC needs no handling. TAC on Bitcoin reaches the reverse address only when it is moved there, and the reverse address needs plain sats for its fees.
+
+The Maintenance page works out what is short and prints the command that fixes it, with the coins it names already filled in. `↑` and `↓` scroll; `shift+↑` and `shift+↓` (or `K` and `J`) pick a command, and `c` (or Enter) copies it, whole and ready to paste, through the terminal's clipboard (OSC 52). Most terminals allow it; some ship with it off, and in tmux it needs `set-clipboard on`. The commands run `scripts/helpers/fast-bridge`, from this checkout:
+
+```bash
+scripts/helpers/fast-bridge status                 # the reverse address, and the TAC and sats at it (reads only)
+scripts/helpers/fast-bridge fund …                 # move up to 25 TAC of a forward take to the reverse address
+scripts/helpers/fast-bridge topup --coin <txid:vout>   # move a plain coin of the main address there, for fees
+```
+
+How much TAC the reverse address holds takes the key to read. To have the page show it, set `fast_bridge.status_cmd` to the helper's read-only `status`, with the full path:
+
+```toml
+[fast_bridge]
+status_cmd = ["/path/to/tacmon/scripts/helpers/fast-bridge", "status"]
+```
+
+tacmon runs it every five minutes (`refresh.status_secs`; each run takes about a minute) and reads what it prints. The key stays in that child process, never in tacmon's. With no terminal, the helper's `sudo` cannot ask for a password, so run tacmon as a user that can read the environment file, or allow that one `sudo grep` without one.
+
+The helper reads `FB_LP_KEY` from the provider's environment file (`/etc/tacit-fastbridge-lp/env`, through `sudo` if need be) and runs tacit's own tools with it, from a tacit checkout beside this one (`TACIT_DIR` to name another). Each tool that sends prints its plan and a token, and sends only when run again with `--send --confirm <token>`.
+
 ## Security
 
-tacmon is read only: it never sees a key, signs nothing and writes nothing. It is reviewed by its own developer, not by an outside firm, and the work is in the open so it can be checked:
+tacmon is read only: the binary never sees a key, signs nothing and writes nothing. The one script that handles a key, `scripts/helpers/fast-bridge`, is run by hand and reviewed with the code. It is reviewed by its own developer, not by an outside firm, and the work is in the open so it can be checked:
 
-- [SECURITY.md](SECURITY.md) states the threat model and ten claims, each with what holds it up.
+- [SECURITY.md](SECURITY.md) states the threat model and eleven claims, each with what holds it up.
 - `make audit-checks` holds the dependency tree to RustSec advisories, a licence list and crates.io only, and the crate to no `unsafe`.
 - `make audit` has language models from different labs attack those claims independently, and records what ran and what they found in [`audits/`](audits/README.md).
 

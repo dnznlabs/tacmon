@@ -1,11 +1,11 @@
-//! What is read from this machine: the provider's log through a command, its swap records from disk.
+//! What is read from this machine: the provider's log and its reverse stock through commands, its swap records from disk.
 
 use super::wire;
 use crate::monitors::fast_bridge::{
-    model::{Level, LogEntry, Swap},
-    ports::{Fut, LogFeed, QUEUE, SwapStore},
+    model::{Level, LogEntry, ReverseStock, Swap},
+    ports::{Fut, Inventory, LogFeed, QUEUE, SwapStore},
 };
-use anyhow::bail;
+use anyhow::{Context, bail};
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -117,35 +117,82 @@ impl LogFeed for CommandLog {
     }
 }
 
+/// The most of the status command's output that is read. It prints a couple of kilobytes.
+const MAX_STATUS: u64 = 64 << 10;
+/// How long one status run may take. It scans the pool, which takes the better part of a minute.
+const STATUS_WAIT: Duration = Duration::from_secs(180);
+
+pub struct CommandInventory {
+    cmd: Vec<String>,
+}
+
+pub fn create_command_inventory(cmd: &[String]) -> CommandInventory {
+    CommandInventory { cmd: cmd.to_vec() }
+}
+
+impl Inventory for CommandInventory {
+    /// One run of the command. It holds the key; this process only reads what it prints.
+    fn reverse_stock(&self) -> Fut<'_, ReverseStock> {
+        Box::pin(async move {
+            let Some((prog, args)) = self.cmd.split_first() else { bail!("status_cmd is empty") };
+            // no stdin: a sudo inside cannot stop to ask for a password, it fails instead
+            let mut child =
+                tokio::process::Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn()?;
+            let mut out = Vec::new();
+            let stdout = child.stdout.take().context("no stdout")?;
+            let read = async {
+                stdout.take(MAX_STATUS).read_to_end(&mut out).await?;
+                child.wait().await
+            };
+            let status = tokio::time::timeout(STATUS_WAIT, read).await.context("status_cmd took too long")??;
+            if !status.success() {
+                bail!("status_cmd exited with {status}");
+            }
+            wire::reverse_stock(&String::from_utf8_lossy(&out)).context("status_cmd printed no reverse address and TAC")
+        })
+    }
+}
+
 pub struct FileSwaps {
     dir: PathBuf,
 }
 
 pub fn create_file_swaps(data_dir: &std::path::Path) -> FileSwaps {
-    FileSwaps { dir: data_dir.join("swaps") }
+    FileSwaps { dir: data_dir.to_path_buf() }
+}
+
+/// The records in one directory, read with `parse`, counting toward `seen` across directories.
+async fn records(dir: &Path, parse: fn(&serde_json::Value) -> Option<Swap>, seen: &mut usize, out: &mut Vec<Swap>) -> anyhow::Result<()> {
+    let mut rd = tokio::fs::read_dir(dir).await?;
+    while let Some(e) = rd.next_entry().await? {
+        let p = e.path();
+        // the store keeps .bak and .tmp files beside each record
+        if p.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        *seen += 1;
+        if *seen > MAX_RECORDS {
+            bail!("more than {MAX_RECORDS} swap records");
+        }
+        // a record caught mid-write is skipped and read whole on the next pass
+        let bytes = tokio::time::timeout(RECORD_WAIT, record(&p)).await.ok().flatten();
+        if let Some(s) = bytes.and_then(|b| serde_json::from_slice(&b).ok()).and_then(|v| parse(&v)) {
+            out.push(s);
+        }
+    }
+    Ok(())
 }
 
 impl SwapStore for FileSwaps {
+    /// Both directions. `reverse/swaps/` is only there once the reverse side has run: its absence is no records, any
+    /// other failure to read it a failed read, as for `swaps/`.
     fn swaps(&self) -> Fut<'_, Vec<Swap>> {
         Box::pin(async move {
-            let mut rd = tokio::fs::read_dir(&self.dir).await?;
-            let mut out = Vec::new();
-            let mut seen = 0usize;
-            while let Some(e) = rd.next_entry().await? {
-                let p = e.path();
-                // the store keeps .bak and .tmp files beside each record
-                if p.extension().is_none_or(|x| x != "json") {
-                    continue;
-                }
-                seen += 1;
-                if seen > MAX_RECORDS {
-                    bail!("more than {MAX_RECORDS} swap records");
-                }
-                // a record caught mid-write is skipped and read whole on the next pass
-                let bytes = tokio::time::timeout(RECORD_WAIT, record(&p)).await.ok().flatten();
-                if let Some(s) = bytes.and_then(|b| serde_json::from_slice(&b).ok()).and_then(|v| wire::swap(&v)) {
-                    out.push(s);
-                }
+            let (mut out, mut seen) = (Vec::new(), 0usize);
+            records(&self.dir.join("swaps"), wire::swap, &mut seen, &mut out).await?;
+            match records(&self.dir.join("reverse/swaps"), wire::reverse_swap, &mut seen, &mut out).await {
+                Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound) => {}
+                other => other?,
             }
             Ok(out)
         })
@@ -155,6 +202,7 @@ impl SwapStore for FileSwaps {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::monitors::fast_bridge::model::Direction;
 
     async fn lines(bytes: &[u8]) -> Vec<String> {
         let mut r = BufReader::with_capacity(16, bytes);
@@ -183,6 +231,39 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(read.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["aa"]);
+    }
+
+    #[tokio::test]
+    async fn both_directions_are_read_and_a_reverse_side_that_never_ran_has_no_records() {
+        let dir = std::env::temp_dir().join(format!("tacmon-test-both-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("swaps")).expect("a directory");
+        std::fs::write(dir.join("swaps/f.json"), r#"{"id":"fw","phase":"done","offer":{"btc":{"value":"2"},"evm":{"amount":"1"}}}"#).expect("a record");
+        let forward_only = create_file_swaps(&dir).swaps().await.expect("a read").len();
+        std::fs::create_dir_all(dir.join("reverse/swaps")).expect("a directory");
+        std::fs::write(dir.join("reverse/swaps/r.json"), r#"{"id":"rv","phase":"built","amount":"5","evmAmount":"6"}"#).expect("a record");
+
+        let mut read = create_file_swaps(&dir).swaps().await.expect("a read");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        read.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(forward_only, 1);
+        assert_eq!(read.iter().map(|s| (s.id.as_str(), s.direction)).collect::<Vec<_>>(), [("fw", Direction::Forward), ("rv", Direction::Reverse)]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_status_command_that_fails_or_prints_nothing_useful_is_a_failed_read() {
+        let run = |cmd: &[&str]| create_command_inventory(&cmd.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let good = "printf 'reverse address   bc1qtestreverse00000000000000000000000000\\nTAC at it  1 confirmed note, 20 TAC in all\\n'";
+
+        let (ok, failed, silent) = (
+            run(&["sh", "-c", good]).reverse_stock().await,
+            run(&["sh", "-c", &format!("{good}; exit 3")]).reverse_stock().await,
+            run(&["true"]).reverse_stock().await,
+        );
+
+        assert_eq!(ok.expect("a read").tac, 20 * crate::monitors::fast_bridge::model::UNIT);
+        assert!(failed.is_err() && silent.is_err());
     }
 
     #[tokio::test]
