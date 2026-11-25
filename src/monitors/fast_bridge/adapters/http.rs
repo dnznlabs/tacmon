@@ -2,8 +2,8 @@
 
 use super::wire;
 use crate::monitors::fast_bridge::{
-    model::{Ad, ChainTx, Coin, Health, Outlook, ReverseSide, Terms, Want},
-    ports::{Board, Chain, Fut, GasBalance, Provider},
+    model::{Ad, ChainTx, Coin, Health, Outlook, PoolLock, ReverseSide, Terms, Want},
+    ports::{Board, Chain, Fut, GasBalance, PoolLog, Provider},
 };
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -162,6 +162,43 @@ impl GasBalance for RpcGas {
     }
 }
 
+/// One JSON-RPC call's result. An answer that carries an error, or no result, is a failed read.
+async fn rpc_call(http: &reqwest::Client, rpc: &str, method: &str, params: Value, max: usize) -> Result<Value> {
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+    let mut v = json_within(succeeded(http.post(rpc).json(&body).send().await?)?, max).await?;
+    if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
+        bail!("the RPC refused: {}", e.get("message").and_then(Value::as_str).unwrap_or("no reason given").chars().take(120).collect::<String>());
+    }
+    v.get_mut("result").map(Value::take).filter(|r| !r.is_null()).context("the RPC answered without a result")
+}
+
+pub struct RpcPoolLog {
+    http: reqwest::Client,
+    rpc: String,
+    /// Lower case, checked when the adapter was made.
+    pool: String,
+}
+
+/// `None` when `pool` is not an Ethereum address: nothing is asked about a contract that cannot be named.
+pub fn create_rpc_pool_log(http: reqwest::Client, rpc: &str, pool: &str) -> Option<RpcPoolLog> {
+    Some(RpcPoolLog { http, rpc: rpc.to_string(), pool: wire::eth_address(pool)? })
+}
+
+impl PoolLog for RpcPoolLog {
+    fn tip(&self) -> Fut<'_, u64> {
+        Box::pin(async move { wire::quantity(&rpc_call(&self.http, &self.rpc, "eth_blockNumber", json!([]), MAX_BODY).await?).context("not a block number") })
+    }
+    fn locks(&self, from: u64, to: u64) -> Fut<'_, Vec<PoolLock>> {
+        Box::pin(async move {
+            let filter =
+                json!([{ "address": self.pool, "topics": [wire::LOCK_LEAVES_TOPIC], "fromBlock": format!("{from:#x}"), "toBlock": format!("{to:#x}") }]);
+            // a day of the pool's locks is some 20 KiB: an answer over the bound fails, since part of a log is not the log
+            let logs = rpc_call(&self.http, &self.rpc, "eth_getLogs", filter, MAX_HISTORY).await?;
+            wire::pool_locks(&logs, &self.pool).context("the RPC answered without a list")
+        })
+    }
+}
+
 pub struct HttpChain {
     http: reqwest::Client,
     base: String,
@@ -201,6 +238,13 @@ impl Chain for HttpChain {
                 bail!("the explorer answered with another transaction");
             }
             Ok(Some(tx))
+        })
+    }
+    fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool> {
+        Box::pin(async move {
+            let id = wire::txid_text(txid).context("not a transaction id")?;
+            let v = get(&self.http, &format!("{}/tx/{id}/outspend/{vout}", self.base)).await?;
+            v.get("spent").and_then(Value::as_bool).context("the explorer answered without saying")
         })
     }
     fn outlook(&self) -> Fut<'_, Outlook> {
@@ -364,5 +408,19 @@ mod tests {
         let (fits, over) = (keep(&mut body, &[0], MAX_BODY).is_ok(), keep(&mut body, &[0], MAX_BODY).is_err());
 
         assert_eq!((fits, over, body.len()), (true, true, MAX_BODY));
+    }
+
+    #[tokio::test]
+    async fn an_rpc_that_refuses_is_a_failed_read_and_a_pool_that_is_not_an_address_is_never_asked_about() {
+        let refused = serve_once("200 OK".into(), r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"range too wide"},"result":[]}"#).await;
+        let answered = serve_once("200 OK".into(), r#"{"jsonrpc":"2.0","id":1,"result":"0x2a"}"#).await;
+        let pool = format!("0x{}", "ab".repeat(20));
+
+        let locks = create_rpc_pool_log(create_http_client(), &refused, &pool).expect("an adapter").locks(1, 2).await;
+        let tip = create_rpc_pool_log(create_http_client(), &answered, &pool).expect("an adapter").tip().await;
+        let unnamed = create_rpc_pool_log(create_http_client(), &answered, "the pool");
+
+        assert!(locks.is_err_and(|e| e.to_string().contains("range too wide")));
+        assert_eq!((tip.ok(), unnamed.is_none()), (Some(42), true));
     }
 }

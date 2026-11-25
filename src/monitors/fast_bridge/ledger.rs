@@ -1,7 +1,7 @@
 //! The Bitcoin transactions a provider's swaps and addresses depend on, as rows, and which of them are stuck.
 //! Arithmetic only: no state, no I/O.
 
-use super::model::{ChainTx, Direction, Outlook, Role, Swap};
+use super::model::{ChainTx, Direction, Outlook, PoolLock, PoolScan, Role, Swap};
 use std::collections::{HashMap, HashSet};
 
 /// How many swaps' transactions are followed: the open ones first, then the newest. It bounds what an explorer is asked.
@@ -14,6 +14,13 @@ pub const SLOW_PERCENT: u64 = 80;
 /// How long a slow transaction is given before it is called stuck: about a block.
 pub const GRACE_SECS: u64 = 600;
 
+/// How far back the pool's log on Ethereum is read, in blocks: a day. A swap is open for hours.
+pub const POOL_LOOKBACK: u64 = 7_200;
+/// Blocks after which Ethereum does not take a transaction back: two epochs.
+pub const POOL_SETTLED: u64 = 64;
+/// Ethereum makes a block every twelve seconds, or skips one: never sooner.
+const BLOCK_SECS: u64 = 12;
+
 /// Which of the provider's addresses a transaction pays or spends from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
@@ -23,6 +30,8 @@ pub enum Place {
     Both,
     /// Listed at neither: known through a swap record only.
     Elsewhere,
+    /// On Ethereum, in the pool contract.
+    Pool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,8 +80,37 @@ pub struct Facts<'a> {
     pub outlook: Option<Outlook>,
     /// When each unconfirmed transaction was first seen.
     pub first_seen: &'a HashMap<String, u64>,
+    /// The pool's log on Ethereum. `None`: not read.
+    pub pool: Option<&'a PoolScan>,
     pub now: u64,
     pub stuck_secs: u64,
+}
+
+/// The lock a forward swap put into the pool, where the log that was read shows it.
+fn pool_lock<'a>(scan: &'a PoolScan, s: &Swap) -> Option<&'a PoolLock> {
+    (!s.pool_leaf.is_empty()).then(|| scan.locks.iter().rev().find(|l| l.leaf == s.pool_leaf)).flatten()
+}
+
+/// A swap still making its pool lock, and how long it has been.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockWait {
+    pub swap: String,
+    pub secs: u64,
+}
+
+/// The followed forward swaps that have been making their pool lock for `stuck_secs` or longer while the pool's log
+/// shows none. Only where the log was read back to before the swap began: a lock older than the read is not missing.
+pub fn lock_waits(swaps: &[Swap], scan: &PoolScan, now: u64, stuck_secs: u64) -> Vec<LockWait> {
+    followed(swaps)
+        .into_iter()
+        .filter(|s| s.direction == Direction::Forward && s.phase == "locking" && !s.pool_leaf.is_empty())
+        .filter_map(|s| {
+            let secs = now.saturating_sub(s.created);
+            // at most this many blocks since it began, so a read that reaches further back has all of them
+            let covered = scan.since <= scan.tip.saturating_sub(secs / BLOCK_SECS + 1);
+            (secs >= stuck_secs && covered && pool_lock(scan, s).is_none()).then(|| LockWait { swap: s.id.clone(), secs })
+        })
+        .collect()
 }
 
 /// The swaps whose transactions are followed: open ones first, then the newest, `MAX_SWAPS` at most.
@@ -156,6 +194,26 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
                 out.push((r.at.unwrap_or(s.created), r));
             }
         }
+        if let Some((scan, lock)) = f.pool.and_then(|scan| Some((scan, pool_lock(scan, s)?))) {
+            let r = TxRow {
+                txid: lock.tx.clone(),
+                place: Place::Pool,
+                role: Some(Role::PoolLock),
+                swap: Some((s.id.clone(), s.direction)),
+                // what the provider locked for the bridger, by the swap record: the pool hides amounts
+                tac: Some(s.gets),
+                sats: None,
+                note: false,
+                status: Status::Confirmed(Some(scan.tip.saturating_sub(lock.block).saturating_add(1))),
+                rate_milli: None,
+                at: lock.time,
+                slow: false,
+                stuck: false,
+                spends_reverse: false,
+            };
+            // a node that gives no time for the block: placed by its depth, which is no younger than this
+            out.push((lock.time.unwrap_or_else(|| f.now.saturating_sub(scan.tip.saturating_sub(lock.block).saturating_mul(BLOCK_SECS))), r));
+        }
     }
     for id in order {
         if seen.insert(id) {
@@ -182,7 +240,7 @@ mod tests {
         c.to_string().repeat(64)
     }
     fn tx(c: char, height: Option<u64>, received: u64, sent: u64) -> ChainTx {
-        ChainTx { txid: id(c), fee: 430, vsize: 430, height, time: height.map(|h| h * 600), received, sent, note: received == 546 }
+        ChainTx { txid: id(c), fee: 430, vsize: 430, height, time: height.map(|h| h * 600), received, sent, note: received == 546, notes_away: Vec::new() }
     }
     fn swap(n: u64, phase: &str, linked: &[(Role, char)]) -> Swap {
         Swap {
@@ -209,6 +267,7 @@ mod tests {
             looked,
             outlook: Some(Outlook { tip: 105, hour_milli: 1_000 }),
             first_seen: seen,
+            pool: None,
             now: 10_000,
             stuck_secs: 1_800,
         }
@@ -271,5 +330,35 @@ mod tests {
 
         assert_eq!((kept.len(), kept[0].id.as_str(), kept[1].id.as_str()), (MAX_SWAPS, "swap3", "swap59"));
         assert_eq!(ids, [id('a'), id('b')]);
+    }
+
+    fn lock(leaf: char, tx: char, block: u64) -> PoolLock {
+        PoolLock { leaf: id(leaf), tx: format!("0x{}", id(tx)), block, time: Some(block * 12) }
+    }
+
+    #[test]
+    fn a_forward_swaps_pool_lock_is_a_row_with_its_depth_and_the_swaps_own_amount() {
+        let swaps = [Swap { pool_leaf: id('7'), ..swap(1, "offered", &[]) }, Swap { pool_leaf: id('8'), ..swap(2, "locking", &[]) }];
+        // another provider's lock is in the same log, and is nobody's row here
+        let scan = PoolScan { tip: 109, since: 0, locks: vec![lock('7', 'e', 100), lock('5', 'f', 101)] };
+        let (looked, seen) = (HashMap::new(), HashMap::new());
+
+        let rows = rows(&Facts { pool: Some(&scan), ..facts(&swaps, &[], &[], &looked, &seen) });
+
+        let got: Vec<_> = rows.iter().map(|r| (r.txid.as_str(), r.place, r.role, r.tac, r.status, r.at, r.stuck)).collect();
+        assert_eq!(got, [(format!("0x{}", id('e')).as_str(), Place::Pool, Some(Role::PoolLock), Some(100), Status::Confirmed(Some(10)), Some(1_200), false)]);
+    }
+
+    #[test]
+    fn a_lock_is_only_called_missing_after_a_long_wait_and_where_the_log_was_read_back_to_before_the_swap() {
+        let making = |n: u64, leaf: char| Swap { pool_leaf: id(leaf), ..swap(n, "locking", &[]) };
+        // began 2,000 s before now, 1,000 s, and 100 s: the last has not waited long
+        let swaps = [making(8_000, '1'), making(9_000, '2'), making(9_900, '3'), Swap { phase: "offered".into(), ..making(8_000, '4') }];
+        let read = |since| PoolScan { tip: 1_000, since, locks: vec![lock('2', 'e', 990)] };
+
+        // 2,000 s is at most 167 blocks: a read from block 800 has them all, one from block 900 does not
+        let (far, near) = (lock_waits(&swaps, &read(800), 10_000, 900), lock_waits(&swaps, &read(900), 10_000, 900));
+
+        assert_eq!((far, near), (vec![LockWait { swap: "swap8000".into(), secs: 2_000 }], vec![]));
     }
 }

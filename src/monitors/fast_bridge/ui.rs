@@ -760,6 +760,7 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
                 Place::Reverse => "reverse",
                 Place::Both => "main+reverse",
                 Place::Elsewhere => "—",
+                Place::Pool => "pool · eth",
             };
             // one no swap names is told by which way the sats went
             let what = match (r.role, r.sats) {
@@ -775,12 +776,12 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
                 (None, Some(n)) => format!("{} sats{}", signed_sats(n), if r.note { " · note" } else { "" }),
                 (None, None) => "—".into(),
             };
+            // each chain's own depth past which a transaction stays
+            let settled = if r.place == Place::Pool { super::ledger::POOL_SETTLED } else { super::ledger::SETTLED };
             let status = match (r.status, r.stuck) {
                 (Status::Unconfirmed, true) => Cell::from("▲ unconfirmed · stuck").style(Style::new().fg(th.bad).add_modifier(Modifier::BOLD)),
                 (Status::Unconfirmed, false) => Cell::from("unconfirmed").style(Style::new().fg(th.warn)),
-                (Status::Confirmed(Some(n)), _) if n >= super::ledger::SETTLED => {
-                    Cell::from(format!("● confirmed · {}+", super::ledger::SETTLED)).style(Style::new().fg(th.good))
-                }
+                (Status::Confirmed(Some(n)), _) if n >= settled => Cell::from(format!("● confirmed · {settled}+")).style(Style::new().fg(th.good)),
                 (Status::Confirmed(Some(n)), _) => Cell::from(format!("● confirmed · {n}")).style(Style::new().fg(th.good)),
                 (Status::Confirmed(None), _) => Cell::from("● confirmed").style(Style::new().fg(th.good)),
                 (Status::Missing, _) => Cell::from("✕ not found").style(Style::new().fg(th.warn)),
@@ -800,6 +801,7 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             if this { row.style(Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED)) } else { row }
         })
         .collect();
+    let bitcoin = rows.iter().filter(|r| r.place != Place::Pool).count();
     let title = if st.explorer {
         let going = match (st.outlook, st.outlook_ok) {
             (Some(o), true) => format!(" · about {} sat/vB confirms within the hour", rate(o.hour_milli)),
@@ -810,13 +812,23 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         let read = st.main_txs.is_some() || st.reverse_txs.is_some();
         let failing = !(st.main_txs_ok || st.id.bitcoin_address.is_empty()) || !(st.reverse_txs_ok || st.reverse_address.is_empty()) || !st.lookups_ok;
         format!(
-            " Bitcoin transactions · {} · {waiting} unconfirmed{}{going}{} ",
-            rows.len(),
+            " Bitcoin transactions · {bitcoin} · {waiting} unconfirmed{}{going}{} ",
             if stuck > 0 { format!(" · {stuck} STUCK") } else { String::new() },
             if failing { read_note(false, read) } else { "" }
         )
     } else {
-        format!(" Bitcoin transactions · {} from the swap records · set fast_bridge.btc_explorer for their status and your addresses' ", rows.len())
+        format!(" Bitcoin transactions · {bitcoin} from the swap records · set fast_bridge.btc_explorer for their status and your addresses' ")
+    };
+    // the pool's log is read so far back and no further: a lock older than that has no row, and the title says how far
+    let title = match (&st.pool, st.shows_pool) {
+        (Some(scan), _) => format!(
+            "{title}· Ethereum pool locks · {} in the last {}{} ",
+            rows.len() - bitcoin,
+            dur(scan.tip.saturating_sub(scan.since).saturating_mul(12)),
+            read_note(st.pool_ok, true)
+        ),
+        (None, true) => format!("{title}· Ethereum pool locks{} ", read_note(st.pool_ok, false)),
+        (None, false) => title,
     };
     let widths = [
         Constraint::Length(15),

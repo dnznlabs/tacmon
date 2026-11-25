@@ -17,6 +17,12 @@ pub struct FastBridgeConfig {
     pub eth_rpc: String,
     /// The pool account, when it should not be learned from the log.
     pub pool_account: String,
+    /// The pool contract's address. With `eth_rpc` set too, its log is read for the locks this provider's recent
+    /// swaps put into the pool. Empty: not read.
+    pub pool_contract: String,
+    /// The site an Ethereum transaction's page is on (`https://etherscan.io`), for the link the Transactions page
+    /// copies. Nothing is ever requested from it. Empty: the hash is copied bare.
+    pub eth_explorer: String,
     /// An Esplora API (`https://mempool.space/api`) to read the coins and transactions at the provider's Bitcoin
     /// addresses, and the status of its recent swaps' transactions, from. Empty: not read, and neither the addresses
     /// nor the transaction ids are sent anywhere.
@@ -26,6 +32,11 @@ pub struct FastBridgeConfig {
     /// A command that prints what is at the reverse address, read with the provider's key:
     /// `["/path/to/tacmon/scripts/helpers/fast-bridge", "status"]`. Empty: not run. tacmon reads its output, never the key.
     pub status_cmd: Vec<String>,
+    /// A command that says, with the provider's key, whether a transaction paid the reverse key silently:
+    /// `["/path/to/tacmon/scripts/helpers/fast-bridge", "normalize"]`. tacmon adds `--txid <id>` and nothing else, so
+    /// it is the tool's dry run and sends nothing. Run once for each note that left the main address for an address
+    /// that is neither of the provider's. Empty: not run, and such a send is never flagged.
+    pub normalize_cmd: Vec<String>,
     pub refresh: Refresh,
     pub advisor: Advisor,
 }
@@ -62,9 +73,12 @@ impl Default for FastBridgeConfig {
             log_cmd: ["journalctl", "-u", "tacit-fastbridge-lp", "-o", "cat", "-f", "-n", "2000"].map(String::from).to_vec(),
             eth_rpc: String::new(),
             pool_account: String::new(),
+            pool_contract: String::new(),
+            eth_explorer: String::new(),
             btc_explorer: String::new(),
             reverse_address: String::new(),
             status_cmd: Vec::new(),
+            normalize_cmd: Vec::new(),
             refresh: Refresh::default(),
             advisor: Advisor::default(),
         }

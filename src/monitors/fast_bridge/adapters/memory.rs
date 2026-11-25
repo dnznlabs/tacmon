@@ -2,10 +2,10 @@
 
 use crate::monitors::fast_bridge::{
     model::{
-        Ad, Capacity, ChainTx, Coin, DUST, Direction, Health, Identity, Level, LogEntry, Outlook, ReverseSide, ReverseStock, Role, Signal, Swap, Terms, UNIT,
-        Want,
+        Ad, Capacity, ChainTx, Coin, DUST, Direction, Health, Identity, Level, LogEntry, Outlook, PoolLock, ReverseSide, ReverseStock, Role, Signal, Swap,
+        Terms, UNIT, Want,
     },
-    ports::{Board, Chain, Fut, GasBalance, Inventory, LogFeed, Ports, Provider, QUEUE, SwapStore},
+    ports::{Board, Chain, Fut, GasBalance, Inventory, LogFeed, PoolLog, Ports, Provider, QUEUE, SilentCheck, SwapStore},
 };
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, channel};
@@ -26,6 +26,28 @@ pub struct Memory {
     pub txs: Vec<(String, Vec<ChainTx>)>,
     pub lookups: Vec<ChainTx>,
     pub outlook: Outlook,
+    /// The outputs that have been spent. One not listed is unspent.
+    pub spent: Vec<(String, u32)>,
+    /// The transactions that paid the reverse key silently, and how much TAC each.
+    pub silent: Vec<(String, u128)>,
+    /// The pool's newest block, and every lock in its log.
+    pub eth_tip: u64,
+    pub pool_locks: Vec<PoolLock>,
+}
+
+impl SilentCheck for Memory {
+    fn waiting<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<u128>> {
+        Box::pin(async move { Ok(self.silent.iter().find(|(id, _)| id == txid).map(|(_, tac)| *tac)) })
+    }
+}
+
+impl PoolLog for Memory {
+    fn tip(&self) -> Fut<'_, u64> {
+        Box::pin(async move { Ok(self.eth_tip) })
+    }
+    fn locks(&self, from: u64, to: u64) -> Fut<'_, Vec<PoolLock>> {
+        Box::pin(async move { Ok(self.pool_locks.iter().filter(|l| (from..=to).contains(&l.block)).cloned().collect()) })
+    }
 }
 
 impl Provider for Memory {
@@ -55,6 +77,9 @@ impl Chain for Memory {
     }
     fn tx<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<ChainTx>> {
         Box::pin(async move { Ok(self.lookups.iter().find(|t| t.txid == txid).cloned()) })
+    }
+    fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool> {
+        Box::pin(async move { Ok(self.spent.iter().any(|(id, n)| id == txid && *n == vout)) })
     }
     fn outlook(&self) -> Fut<'_, Outlook> {
         Box::pin(async move { Ok(self.outlook) })
@@ -108,7 +133,9 @@ pub fn create_memory_ports(data: Memory, log: Vec<LogEntry>) -> Ports {
         swaps: m.clone(),
         gas: Some(m.clone()),
         chain: Some(m.clone()),
-        inventory: Some(m),
+        pool: Some(m.clone()),
+        inventory: Some(m.clone()),
+        silent: Some(m),
         log: Box::new(MemoryLog(log)),
     }
 }
@@ -133,6 +160,7 @@ pub fn create_demo_ports(now: u64) -> Ports {
             .filter(|(_, _, named)| *named)
             .map(|(role, c, _)| (role, format!("{}{id}", c.repeat(56))))
             .collect(),
+        pool_leaf: if phase == "accepted" { String::new() } else { format!("{}{id}", "7".repeat(56)) },
     };
     // the bridger pays pool TAC and gets a note on Bitcoin; no deadline until it has offered its pool lock
     let reverse_swap = |id: &str, phase: &str, age: u64, gets: u128| Swap {
@@ -141,6 +169,7 @@ pub fn create_demo_ports(now: u64) -> Ports {
         pays: gets * 10_000 / 9_970 + UNIT / 10,
         take_txid: String::new(),
         linked: vec![(Role::LockCommit, format!("{}{id}", "8".repeat(56))), (Role::Lock, format!("{}{id}", "f".repeat(56)))],
+        pool_leaf: String::new(),
         ..swap(id, phase, age, gets)
     };
     let reverse_terms = Terms { min: t(10), max: t(1000), fee_bps: 30, flat: UNIT / 10, available: Some(t(4)), ..Default::default() };
@@ -148,6 +177,14 @@ pub fn create_demo_ports(now: u64) -> Ports {
     let coin = |txid: String, vout, sats| Coin { txid, vout, sats, confirmed: true };
     let take = |id: &str| format!("{}{id}", "e".repeat(56));
     const TIP: u64 = 900_000;
+    const ETH_TIP: u64 = 26_000_000;
+    // the provider's lock in the pool, a minute after the swap began; a block every twelve seconds
+    let pool_lock = |id: &str, age: u64| PoolLock {
+        leaf: format!("{}{id}", "7".repeat(56)),
+        tx: format!("0x{}{id}", "6".repeat(56)),
+        block: ETH_TIP - (age - 60) / 12,
+        time: Some(now - age + 60),
+    };
     // a block about every ten minutes back from the tip
     let mined = |txid: String, age: u64, fee, vsize, (received, sent): (u64, u64)| ChainTx {
         txid,
@@ -158,6 +195,7 @@ pub fn create_demo_ports(now: u64) -> Ports {
         received,
         sent,
         note: received > 0 && received % DUST == 0,
+        notes_away: Vec::new(),
     };
     let ad = |name: &str, key: &str, bps: u64, max: u128, avail: u128, any_tac: bool, reverse_terms: Option<Terms>| Ad {
         name: name.into(),
@@ -239,6 +277,11 @@ pub fn create_demo_ports(now: u64) -> Ports {
             mined(format!("{}f1e2d3c4", "8".repeat(56)), 15_060, 1_200, 141, (0, 0)),
         ],
         outlook: Outlook { tip: TIP, hour_milli: 4_200 },
+        spent: Vec::new(),
+        silent: Vec::new(),
+        eth_tip: ETH_TIP,
+        // oldest first, as a node lists them; the swap still locking has none yet
+        pool_locks: vec![pool_lock("0a1b2c3d", 21_000), pool_lock("c9d0e1f2", 9_000), pool_lock("a1b2c3d4", 1_300)],
         terms,
     };
     let entry =

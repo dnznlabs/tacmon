@@ -1,6 +1,7 @@
 //! The fast bridge monitor: one liquidity provider, watched through its log, its API, its swap records and the board.
 //! Read only. It never sees the provider's key and sends the provider nothing but GETs. The Maintenance page prints
-//! commands for `scripts/helpers/fast-bridge`, which holds the key; tacmon never runs them.
+//! commands for `scripts/helpers/fast-bridge`, which holds the key; tacmon runs none of them as printed. Where the
+//! operator sets `normalize_cmd` it runs that tool's dry run, to learn whether a transaction paid the reverse key silently.
 
 pub mod adapters;
 mod advisor;
@@ -40,7 +41,9 @@ pub fn create_fast_bridge(cfg: &FastBridgeConfig, demo: bool) -> FastBridge {
     let ports = if demo { adapters::memory::create_demo_ports(now()) } else { adapters::create_ports(cfg) };
     // a demo shows nothing of the operator's: the pool account in their config would otherwise sit in the header
     let cfg = if demo { FastBridgeConfig { pool_account: String::new(), reverse_address: String::new(), ..cfg.clone() } } else { cfg.clone() };
-    FastBridge { state: State::new(&cfg, ports.gas.is_some(), ports.chain.is_some(), ports.inventory.is_some()), cfg, ports: Some(ports), events: None }
+    let mut state = State::new(&cfg, ports.gas.is_some(), ports.chain.is_some(), ports.inventory.is_some());
+    state.shows_pool = ports.pool.is_some();
+    FastBridge { state, cfg, ports: Some(ports), events: None }
 }
 
 impl Monitor for FastBridge {

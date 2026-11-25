@@ -4,7 +4,7 @@ use super::{
     advisor::{self, Advice},
     config::FastBridgeConfig,
     feed::Event,
-    ledger::{self, TxRow},
+    ledger::{self, Place, TxRow},
     model::*,
     upkeep::{self, Facts, Upkeep},
 };
@@ -51,6 +51,8 @@ pub struct State {
     tx_pick: Option<(String, usize)>,
     /// Where a transaction's page is on the configured explorer's site. Empty with no explorer: the id is copied bare.
     tx_link: String,
+    /// The same for an Ethereum transaction, from `eth_explorer`. Empty: the hash is copied bare.
+    eth_link: String,
     /// A command or a link a key asked to copy, until the shell takes it.
     pub copy: Option<String>,
 
@@ -117,6 +119,14 @@ pub struct State {
     pub outlook_ok: bool,
     /// When each transaction now unconfirmed was first seen by this run.
     first_seen: HashMap<String, u64>,
+    /// Transactions at the main address that sent a note elsewhere, and whether one of those notes is still unspent.
+    away: HashMap<String, bool>,
+    /// What the key said of each: the TAC it paid the reverse key silently, or `None` when none of it did.
+    silent: HashMap<String, Option<u128>>,
+    /// Whether the pool's log on Ethereum is read at all, what was last read of it, and whether the last read answered.
+    pub shows_pool: bool,
+    pub pool: Option<PoolScan>,
+    pub pool_ok: bool,
     tx_stuck_secs: u64,
 
     pub deadline_warn_secs: u64,
@@ -139,6 +149,7 @@ impl State {
                 .filter(|b| !b.is_empty())
                 .map(|b| format!("{}/tx/", b.strip_suffix("/api").unwrap_or(b)))
                 .unwrap_or_default(),
+            eth_link: Some(cfg.eth_explorer.trim_end_matches('/')).filter(|b| !b.is_empty()).map(|b| format!("{b}/tx/")).unwrap_or_default(),
             copy: None,
             id: Identity { pool_account: cfg.pool_account.clone(), ..Default::default() },
             cap: Capacity::default(),
@@ -183,6 +194,11 @@ impl State {
             outlook: None,
             outlook_ok: false,
             first_seen: HashMap::new(),
+            away: HashMap::new(),
+            silent: HashMap::new(),
+            shows_pool: false,
+            pool: None,
+            pool_ok: false,
             tx_stuck_secs: cfg.advisor.tx_stuck_secs,
             deadline_warn_secs: cfg.advisor.deadline_warn_secs,
             fee_ladder_bps: cfg.advisor.fee_ladder_bps.clone(),
@@ -303,6 +319,22 @@ impl State {
                 self.looked.extend(found.into_iter().filter(|(id, _)| wanted.contains(id)));
                 self.see_unconfirmed();
             }
+            Event::NotesAway(found) => {
+                self.away.extend(found);
+                // a transaction the address no longer lists is not asked about any more
+                let listed: HashSet<&str> = self.main_txs.iter().flatten().map(|t| t.txid.as_str()).collect();
+                self.away.retain(|id, _| listed.contains(id.as_str()));
+                self.silent.retain(|id, _| listed.contains(id.as_str()));
+            }
+            Event::Silent(id, tac) => {
+                self.silent.insert(id, tac);
+            }
+            Event::Pool(p) => {
+                self.pool_ok = p.is_some();
+                if p.is_some() {
+                    self.pool = p;
+                }
+            }
             Event::Outlook(o) => {
                 self.outlook_ok = o.is_some();
                 if o.is_some() {
@@ -343,6 +375,7 @@ impl State {
             looked: &self.looked,
             outlook: self.outlook,
             first_seen: &self.first_seen,
+            pool: self.pool.as_ref(),
             now: self.now,
             stuck_secs: self.tx_stuck_secs,
         })
@@ -392,7 +425,9 @@ impl State {
                 KeyCode::Char('g') | KeyCode::Home => 0,
                 KeyCode::Char('G') | KeyCode::End => last,
                 KeyCode::Char('c') | KeyCode::Enter => {
-                    self.copy = Some(format!("{}{}", self.tx_link, rows[at].txid));
+                    // an Ethereum hash is told by its 0x, and has a site of its own
+                    let site = if rows[at].place == Place::Pool { &self.eth_link } else { &self.tx_link };
+                    self.copy = Some(format!("{site}{}", rows[at].txid));
                     at
                 }
                 _ => at,
@@ -572,6 +607,15 @@ impl State {
             explorer: self.explorer,
             // a bridger's lock is the bridger's to bump: it is on the Transactions page, not on the to-do list
             stuck: &self.ledger().into_iter().filter(|r| r.stuck && r.role != Some(Role::BridgerLock)).collect::<Vec<_>>(),
+            // newest first, as the address lists them: only what the key called a silent send, and only while it waits
+            silent: &self
+                .main_txs
+                .iter()
+                .flatten()
+                .filter(|t| self.away.get(&t.txid) == Some(&true))
+                .filter_map(|t| Some((t.txid.clone(), self.silent.get(&t.txid).copied().flatten()?)))
+                .collect::<Vec<_>>(),
+            lock_waits: &self.pool.as_ref().map(|scan| ledger::lock_waits(&self.swaps, scan, self.now, self.tx_stuck_secs)).unwrap_or_default(),
             hour_milli: self.outlook.map(|o| o.hour_milli),
             now: self.now,
         })
@@ -1009,5 +1053,38 @@ mod tests {
 
         assert_eq!((kept, after_the_gap), (1, ledger::Status::Confirmed(None)));
         assert_eq!(st.ledger()[0].status, ledger::Status::Unknown);
+    }
+
+    #[test]
+    fn a_pool_lock_is_copied_with_the_ethereum_sites_link_and_a_failed_read_keeps_the_last_log() {
+        let cfg = FastBridgeConfig { eth_explorer: "https://eth.example/".into(), ..Default::default() };
+        let (mut st, leaf) = (State::new(&cfg, false, false, false), "7".repeat(64));
+        st.apply(Event::Swaps(Some(vec![Swap { pool_leaf: leaf.clone(), ..swap("offered", 1, 110, 100) }])));
+        let lock = PoolLock { leaf, tx: format!("0x{}", "e".repeat(64)), block: 5, time: Some(60) };
+        st.apply(Event::Pool(Some(PoolScan { tip: 9, since: 0, locks: vec![lock] })));
+
+        st.apply(Event::Pool(None));
+        st.on_key(Page::Transactions, KeyEvent::from(KeyCode::Enter));
+
+        assert_eq!((st.copy.as_deref(), st.pool_ok, st.ledger().len()), (Some(format!("https://eth.example/tx/0x{}", "e".repeat(64)).as_str()), false, 1));
+    }
+
+    #[test]
+    fn only_a_note_the_key_calls_a_silent_send_is_a_normalize_step_and_only_until_it_moves() {
+        let mut st = state();
+        let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
+        let tx = |id: &String| ChainTx { txid: id.clone(), notes_away: vec![0], ..Default::default() };
+        let steps = |st: &State| st.commands().iter().filter(|c| c.contains("normalize")).count();
+        st.apply(Event::MainTxs(Some(vec![tx(&a), tx(&b), tx(&c)])));
+        st.apply(Event::NotesAway(vec![(a.clone(), true), (b.clone(), true), (c.clone(), true)]));
+        let unjudged = steps(&st);
+
+        // the key: a paid the reverse side 200 TAC, b went to someone else, and c has not been judged
+        st.apply(Event::Silent(a.clone(), Some(200 * UNIT)));
+        st.apply(Event::Silent(b.clone(), None));
+        let judged = steps(&st);
+        st.apply(Event::NotesAway(vec![(a.clone(), false)]));
+
+        assert_eq!((unjudged, judged, steps(&st)), (0, 1, 0));
     }
 }
