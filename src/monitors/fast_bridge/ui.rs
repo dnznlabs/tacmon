@@ -382,7 +382,7 @@ fn market(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     f.render_widget(
         table(
             title,
-            &["  NAME", "    FEE", "    FLAT", " @100 TAC", "@1000 TAC", "               TAKES (TAC)", "   AVAILABLE", "ACCEPTS"],
+            &["  NAME", "    FEE", "    FLAT", " @100 TAC", " @1000 TAC", "               TAKES (TAC)", "   AVAILABLE", "ACCEPTS"],
             window(rows, st.scroll[Page::Market as usize]),
             &widths,
             th,
