@@ -137,7 +137,7 @@ pub fn upkeep(f: &Facts) -> Upkeep {
         };
         let waited = t.at.map_or_else(String::new, |at| format!(" for {}", dur(f.now.saturating_sub(at))));
         let paying = match (t.rate_milli, f.hour_milli) {
-            (Some(r), Some(h)) if r < h => format!(", paying {} sat/vB where about {} confirms within the hour", rate(r), rate(h)),
+            (Some(r), Some(h)) if t.slow => format!(", paying {} sat/vB where about {} confirms within the hour", rate(r), rate(h)),
             (Some(r), _) => format!(", paying {} sat/vB", rate(r)),
             _ => String::new(),
         };
@@ -404,6 +404,7 @@ mod tests {
             status: Status::Unconfirmed,
             rate_milli: Some(1_160),
             at: Some(400),
+            slow: true,
             stuck: true,
             spends_reverse,
         };

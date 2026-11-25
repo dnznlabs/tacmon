@@ -83,7 +83,7 @@ There are no packaged releases yet. Build it with a Rust toolchain: `make build`
 ```bash
 tacmon                        # Watch the services on this machine
 tacmon --demo                 # Made-up data: nothing is read from this machine or the network
-tacmon --snapshot demand      # One page as plain text, for scripts and bug reports
+tacmon --snapshot demand      # One page as plain text, for scripts and bug reports (pages by tab name: log, maint, tx; the longer old names still work)
 tacmon --no-splash             # Skip the animated start screen
 tacmon --print-config         # The effective configuration, as TOML
 ```
@@ -100,7 +100,9 @@ Optional: `~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.t
 
 The Transactions page is the Bitcoin side only. A row is a transaction one of your recent swaps names (the bridger's lock, your take and its commit; in reverse your lock, its commit and any refund), or one an explorer lists at your main or reverse address. TAC amounts come from the swap record, never the chain: an explorer sees a 546-sat output, not the TAC riding on it, so a transfer no swap names shows its sats and `note` where TAC may be riding.
 
-An unconfirmed transaction is marked **stuck** when it pays under the rate that confirms within about an hour, or has waited longer than `fast_bridge.advisor.tx_stuck_secs` (30 minutes) since tacmon first saw it. Each stuck one is also a line on the Maintenance page. tacmon bumps nothing: the helper's `bump` replaces a transaction the reverse key sent, and the page prints that command only then. Anything else is for the wallet that sent it.
+An unconfirmed transaction is marked **stuck** when it has waited longer than `fast_bridge.advisor.tx_stuck_secs` (30 minutes) since tacmon first saw it, or sooner, after about a block (10 minutes), when it pays under 80% of the rate that confirms within about an hour. The margin is there because explorers' estimates differ several times over. Each stuck one of yours is also a line on the Maintenance page; a bridger's lock is the bridger's to bump and stays off it. tacmon bumps nothing: the helper's `bump` replaces a transaction the reverse key sent, and the page prints that command only then. Anything else is for the wallet that sent it.
+
+The copied link is `btc_explorer` with a trailing `/api` removed, then `/tx/<id>`: right for mempool.space and blockstream.info. An Esplora served at the root of its host has no such page, and the link opens its JSON.
 
 The Ethereum side is not shown yet: the provider records no Ethereum transaction hashes to look up.
 

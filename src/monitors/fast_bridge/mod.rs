@@ -56,6 +56,10 @@ impl Monitor for FastBridge {
     fn pages(&self) -> &'static [&'static str] {
         &Page::TITLES
     }
+    fn page_aliases(&self) -> &'static [(&'static str, usize)] {
+        // the tabs' names before they were shortened: scripts call --snapshot with them
+        &[("activity", Page::Activity as usize), ("maintenance", Page::Maintenance as usize), ("transactions", Page::Transactions as usize)]
+    }
     fn start(&mut self, wake: Wake) {
         if let Some(ports) = self.ports.take() {
             self.events = Some(feed::start(ports, &self.cfg.refresh, self.cfg.pool_account.clone(), self.cfg.reverse_address.clone(), wake));
@@ -98,6 +102,15 @@ impl Monitor for FastBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_renamed_page_is_still_found_by_its_old_name() {
+        let m = create_fast_bridge(&FastBridgeConfig::default(), true);
+
+        let found: Vec<&str> = m.page_aliases().iter().map(|(_, at)| m.pages()[*at]).collect();
+
+        assert_eq!(found, ["Log", "Maint", "Tx"]);
+    }
 
     #[test]
     fn a_demo_shows_nothing_from_the_operators_config() {

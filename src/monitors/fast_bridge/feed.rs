@@ -42,9 +42,15 @@ pub enum Event {
     /// The latest transactions at the main address, and at the reverse one.
     MainTxs(Option<Vec<ChainTx>>),
     ReverseTxs(Option<Vec<ChainTx>>),
-    /// Swap transactions asked about by id this round: `None` beside one the explorer does not know. The flag is
-    /// whether every one asked was answered.
-    Lookups(Vec<(String, Option<ChainTx>)>, bool),
+    /// Swap transactions asked about by id this round: `None` beside one the explorer does not know.
+    Lookups {
+        found: Vec<(String, Option<ChainTx>)>,
+        /// Whether every one asked was answered.
+        answered: bool,
+        /// Every id the round held as wanted. The feed forgets what it knew of any other id at this moment, so the
+        /// state must too: an answer kept by one and dropped by the other is never asked for again.
+        wanted: Vec<String>,
+    },
     Outlook(Option<Outlook>),
 }
 
@@ -165,15 +171,22 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_addr
                 let (m, r, outlook) = tokio::join!(chain.history(&main), chain.history(&reverse), chain.outlook());
                 let (m, r, outlook) = (m.ok(), r.ok(), outlook.ok());
                 // a transaction listed at an address needs no asking by id
-                let listed: HashSet<&str> = m.iter().chain(&r).flatten().map(|t| t.txid.as_str()).collect();
+                let listed: HashSet<String> = m.iter().chain(&r).flatten().map(|t| t.txid.clone()).collect();
+                // what the explorer has already answered is not held back by the lookups, which can be slow
+                if (!main.is_empty() && !o.send(Event::MainTxs(m)).await)
+                    || (!reverse.is_empty() && !o.send(Event::ReverseTxs(r)).await)
+                    || !o.send(Event::Outlook(outlook)).await
+                {
+                    return;
+                }
                 let wanted = linked_rx.borrow().clone();
                 settled.retain(|id| wanted.contains(id));
                 asked.retain(|id, _| wanted.contains(id));
-                let mut ask: Vec<&String> = wanted.iter().filter(|id| !listed.contains(id.as_str()) && !settled.contains(*id)).collect();
-                ask.sort_by_key(|id| asked.get(*id).copied().unwrap_or(0));
+                let mut ask: Vec<String> = wanted.iter().filter(|id| !listed.contains(*id) && !settled.contains(*id)).cloned().collect();
+                ask.sort_by_key(|id| asked.get(id).copied().unwrap_or(0));
                 let (mut found, mut answered) = (Vec::new(), true);
                 for id in ask.into_iter().take(MAX_LOOKUPS) {
-                    match chain.tx(id).await {
+                    match chain.tx(&id).await {
                         Ok(tx) => {
                             let deep = |t: &ChainTx| t.height.zip(outlook).is_some_and(|(h, o)| o.tip.saturating_sub(h).saturating_add(1) >= ledger::SETTLED);
                             if tx.as_ref().is_some_and(deep) {
@@ -183,14 +196,9 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_addr
                         }
                         Err(_) => answered = false,
                     }
-                    asked.insert(id.clone(), round);
+                    asked.insert(id, round);
                 }
-                drop(listed);
-                if (!main.is_empty() && !o.send(Event::MainTxs(m)).await)
-                    || (!reverse.is_empty() && !o.send(Event::ReverseTxs(r)).await)
-                    || !o.send(Event::Outlook(outlook)).await
-                    || !o.send(Event::Lookups(found, answered)).await
-                {
+                if !o.send(Event::Lookups { found, answered, wanted }).await {
                     return;
                 }
                 // an address learned meanwhile is read at once, not a whole interval later
@@ -287,7 +295,7 @@ mod tests {
                 has(|e| matches!(e, Event::ReverseTxs(Some(t)) if t.is_empty())),
                 has(|e| matches!(e, Event::Outlook(Some(o)) if o.tip == 9)),
                 // the take is listed at the main address, so only the bridger's lock is asked about by id
-                has(|e| matches!(e, Event::Lookups(l, true) if l.len() == 1 && l[0].0 == "b".repeat(64))),
+                has(|e| matches!(e, Event::Lookups { found, answered: true, wanted } if found.len() == 1 && found[0].0 == "b".repeat(64) && wanted.len() == 2)),
             ]
         };
 

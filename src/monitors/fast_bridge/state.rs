@@ -252,9 +252,6 @@ impl State {
                     // open ones first, then the newest
                     s.sort_by(|a, b| a.closed().cmp(&b.closed()).then(b.created.cmp(&a.created)));
                     self.swaps = s;
-                    // an answer about a transaction no followed swap names any more is not kept
-                    let followed: HashSet<String> = ledger::linked_ids(&self.swaps).into_iter().collect();
-                    self.looked.retain(|id, _| followed.contains(id));
                 }
             }
             Event::Eth(e) => self.eth = e,
@@ -297,9 +294,13 @@ impl State {
                     self.see_unconfirmed();
                 }
             }
-            Event::Lookups(found, answered) => {
+            Event::Lookups { found, answered, wanted } => {
                 self.lookups_ok = answered;
-                self.looked.extend(found);
+                // pruned by the feed's own list and only here: the feed forgets the same ids in the same round, so
+                // nothing it still holds as settled can go missing from this side
+                let wanted: HashSet<String> = wanted.into_iter().collect();
+                self.looked.retain(|id, _| wanted.contains(id));
+                self.looked.extend(found.into_iter().filter(|(id, _)| wanted.contains(id)));
                 self.see_unconfirmed();
             }
             Event::Outlook(o) => {
@@ -569,7 +570,8 @@ impl State {
             free: self.free(),
             forward_min: self.terms.as_ref().map(|t| t.min),
             explorer: self.explorer,
-            stuck: &self.ledger().into_iter().filter(|r| r.stuck).collect::<Vec<_>>(),
+            // a bridger's lock is the bridger's to bump: it is on the Transactions page, not on the to-do list
+            stuck: &self.ledger().into_iter().filter(|r| r.stuck && r.role != Some(Role::BridgerLock)).collect::<Vec<_>>(),
             hour_milli: self.outlook.map(|o| o.hour_milli),
             now: self.now,
         })
@@ -990,16 +992,22 @@ mod tests {
     }
 
     #[test]
-    fn a_lookup_is_kept_only_while_a_followed_swap_names_it() {
+    fn a_lookup_outlives_a_pass_that_missed_its_record_and_goes_only_when_the_feed_drops_it() {
         let mut st = state();
-        let (lock, gone) = ("a".repeat(64), "b".repeat(64));
-        let named = Swap { linked: vec![(Role::BridgerLock, lock.clone())], ..swap("locking", 5, 110, 100) };
+        let lock = "a".repeat(64);
+        let named = || Swap { linked: vec![(Role::BridgerLock, lock.clone())], ..swap("locking", 5, 110, 100) };
+        let deep = ChainTx { txid: lock.clone(), height: Some(1), ..Default::default() };
 
-        st.apply(Event::Swaps(Some(vec![named])));
-        st.apply(Event::Lookups(vec![(lock.clone(), None), (gone.clone(), None)], true));
-        let before = st.looked.len();
-        st.apply(Event::Swaps(Some(vec![Swap { linked: vec![(Role::BridgerLock, lock)], ..swap("locking", 5, 110, 100) }])));
+        st.apply(Event::Swaps(Some(vec![named()])));
+        st.apply(Event::Lookups { found: vec![(lock.clone(), Some(deep)), ("b".repeat(64), None)], answered: true, wanted: vec![lock.clone()] });
+        let kept = st.looked.len();
+        // the record is caught mid-write for one pass: the feed still holds the id as settled and will not ask again
+        st.apply(Event::Swaps(Some(vec![])));
+        st.apply(Event::Swaps(Some(vec![named()])));
+        let after_the_gap = st.ledger()[0].status;
+        st.apply(Event::Lookups { found: vec![], answered: true, wanted: vec![] });
 
-        assert_eq!((before, st.looked.len(), st.ledger()[0].status), (2, 1, ledger::Status::Missing));
+        assert_eq!((kept, after_the_gap), (1, ledger::Status::Confirmed(None)));
+        assert_eq!(st.ledger()[0].status, ledger::Status::Unknown);
     }
 }

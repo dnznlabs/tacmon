@@ -8,6 +8,11 @@ use std::collections::{HashMap, HashSet};
 pub const MAX_SWAPS: usize = 50;
 /// Blocks after which a transaction is settled, and not asked about again.
 pub const SETTLED: u64 = 6;
+/// A fee rate under this share of the hour estimate is slow. Under it by anything is not: two explorers asked in
+/// the same minute give estimates several times apart.
+pub const SLOW_PERCENT: u64 = 80;
+/// How long a slow transaction is given before it is called stuck: about a block.
+pub const GRACE_SECS: u64 = 600;
 
 /// Which of the provider's addresses a transaction pays or spends from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +53,9 @@ pub struct TxRow {
     pub rate_milli: Option<u64>,
     /// When its block was mined, or for an unconfirmed one when this run of tacmon first saw it.
     pub at: Option<u64>,
-    /// Unconfirmed, and either waiting longer than the operator allows or paying under the going rate.
+    /// Unconfirmed, and paying well under the going rate.
+    pub slow: bool,
+    /// Unconfirmed, and either waiting longer than the operator allows, or slow and past its grace.
     pub stuck: bool,
     /// It spends from the reverse address: the reverse key sent it, and only then can the helper bump it.
     pub spends_reverse: bool,
@@ -118,8 +125,9 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
             Status::Unconfirmed => f.first_seen.get(txid).copied(),
             _ => chain.and_then(|tx| tx.time),
         };
-        let slow = rate_milli.zip(f.outlook).is_some_and(|(rate, o)| rate < o.hour_milli);
-        let waited = at.is_some_and(|t| f.now.saturating_sub(t) >= f.stuck_secs);
+        let unconfirmed = status == Status::Unconfirmed;
+        let slow = unconfirmed && rate_milli.zip(f.outlook).is_some_and(|(rate, o)| rate.saturating_mul(100) < o.hour_milli.saturating_mul(SLOW_PERCENT));
+        let seen_for = |secs: u64| at.is_some_and(|t| f.now.saturating_sub(t) >= secs);
         TxRow {
             txid: txid.to_string(),
             place: at_address.map_or(Place::Elsewhere, |(place, _, _)| *place),
@@ -132,7 +140,8 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
             status,
             rate_milli,
             at,
-            stuck: status == Status::Unconfirmed && (slow || waited),
+            slow,
+            stuck: unconfirmed && (seen_for(f.stuck_secs) || (slow && seen_for(GRACE_SECS))),
             spends_reverse: at_address.is_some_and(|(_, _, spends)| *spends),
         }
     };
@@ -222,27 +231,22 @@ mod tests {
     }
 
     #[test]
-    fn an_unconfirmed_transaction_is_stuck_when_it_pays_under_the_going_rate_or_has_waited_too_long() {
-        let cheap = ChainTx { fee: 400, ..tx('a', None, 546, 0) };
-        let (fair_new, fair_old, mined) = (tx('b', None, 9_000, 0), tx('c', None, 9_000, 0), ChainTx { fee: 1, ..tx('d', Some(105), 9_000, 0) });
-        let reverse = [cheap, fair_new, fair_old, mined];
-        let seen = HashMap::from([(id('b'), 9_990), (id('c'), 8_000)]);
+    fn stuck_takes_a_rate_well_under_the_going_one_and_a_block_of_waiting_or_a_long_wait_alone() {
+        // the going rate is 1.000: 0.79 is slow, 0.81 is within what two explorers disagree by
+        let at = |c: char, fee: u64| ChainTx { fee, ..tx(c, None, 546, 0) };
+        let reverse = [at('a', 340), at('b', 340), at('c', 349), at('d', 430), ChainTx { fee: 1, ..tx('e', Some(105), 9_000, 0) }];
+        let seen = HashMap::from([(id('a'), 9_990), (id('b'), 9_000), (id('c'), 9_000), (id('d'), 8_000)]);
         let (swaps, looked) = ([], HashMap::new());
 
         let rows = rows(&facts(&swaps, &[], &reverse, &looked, &seen));
 
-        let got: Vec<(String, bool, Status)> = rows.iter().map(|r| (r.txid[..1].to_string(), r.stuck, r.status)).collect();
-        // the stuck ones lead; one never seen before has no age and sorts as newest
+        let got: Vec<(String, bool, bool)> = rows.iter().map(|r| (r.txid[..1].to_string(), r.slow, r.stuck)).collect();
+        // slow and just seen is not stuck yet; a fair rate is stuck only once it has waited past the operator's limit
         assert_eq!(
             got,
-            [
-                ("a".into(), true, Status::Unconfirmed),
-                ("c".into(), true, Status::Unconfirmed),
-                ("b".into(), false, Status::Unconfirmed),
-                ("d".into(), false, Status::Confirmed(Some(1)))
-            ]
+            [("b".into(), true, true), ("d".into(), false, true), ("a".into(), true, false), ("c".into(), false, false), ("e".into(), false, false)]
         );
-        assert_eq!((rows[0].rate_milli, rows[0].note, rows[0].role), (Some(930), true, None));
+        assert_eq!((rows[0].rate_milli, rows[0].note, rows[0].role, rows[4].status), (Some(790), true, None, Status::Confirmed(Some(1))));
     }
 
     #[test]

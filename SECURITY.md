@@ -105,6 +105,9 @@ The method, its limits and every past review are in [`audits/`](audits/README.md
   are dry runs, and the tools they run check every coin named against the explorers themselves before spending it,
   so a false coin ends in an error, not a send. A false list can still hide a coin or suggest a move that is not
   needed.
+- **An address's transaction list pushed over its limit.** The list carries every input's witness, so anyone can pay
+  dust to an address from transactions large enough to put its latest 75 over 1 MiB. The read then fails, and shows as
+  failed, until newer transactions push them out; swap transactions are still asked about by id meanwhile.
 - **A false status from the explorer.** The Transactions page believes what the explorer says of a transaction: it
   can call a confirmed one stuck, or a stuck one confirmed. It moves nothing on that word; a bump is the operator's,
   through a tool that reads the chain itself.

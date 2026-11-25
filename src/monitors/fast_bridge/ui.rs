@@ -786,8 +786,7 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
                 (Status::Missing, _) => Cell::from("✕ not found").style(Style::new().fg(th.warn)),
                 (Status::Unknown, _) => Cell::from("?").style(th.dim()),
             };
-            let slow = r.status == Status::Unconfirmed && r.rate_milli.zip(st.outlook).is_some_and(|(rate, o)| rate < o.hour_milli);
-            let fee = r.rate_milli.map_or_else(|| right("—".into()), |m| right(rate(m)).style(if slow { Style::new().fg(th.bad) } else { Style::new() }));
+            let fee = r.rate_milli.map_or_else(|| right("—".into()), |m| right(rate(m)).style(if r.slow { Style::new().fg(th.bad) } else { Style::new() }));
             // an unconfirmed one is timed from when this run first saw it, which is all tacmon can know
             let age = match (r.status, r.at) {
                 (Status::Unconfirmed, Some(at)) => format!("seen {}", dur(st.now.saturating_sub(at))),

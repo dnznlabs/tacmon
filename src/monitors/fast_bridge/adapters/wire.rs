@@ -99,7 +99,13 @@ pub fn swap(v: &Value) -> Option<Swap> {
         gets: offer.get("evm")?.get("amount").and_then(units)?,
         lock_txid: text(v, "lockTxid"),
         take_txid: v.get("take").and_then(|t| txid(t, "txid")).unwrap_or_default(),
-        linked: linked(v, &[(Role::BridgerLock, None, "lockTxid"), (Role::TakeCommit, Some("take"), "commitTxid"), (Role::Take, Some("take"), "txid")]),
+        // the lock is named twice, in the offer and once the provider has seen it: the same transaction
+        linked: txid(v, "lockTxid")
+            .or_else(|| txid(offer.get("btc")?, "txid"))
+            .map(|id| (Role::BridgerLock, id))
+            .into_iter()
+            .chain(linked(v, &[(Role::TakeCommit, Some("take"), "commitTxid"), (Role::Take, Some("take"), "txid")]))
+            .collect(),
     })
 }
 
@@ -590,8 +596,8 @@ plain sats        1 confirmed coin, 30000 sats in all
     #[test]
     fn a_record_names_its_transactions_and_one_that_is_not_an_id_is_left_out() {
         let id = |c: &str| c.repeat(64);
-        let forward = json!({"id": "f", "lockTxid": id("a"), "take": {"commitTxid": "$(reboot)", "txid": id("C")},
-            "offer": {"btc": {"value": "2"}, "evm": {"amount": "1"}}});
+        let forward = json!({"id": "f", "take": {"commitTxid": "$(reboot)", "txid": id("C")},
+            "offer": {"btc": {"value": "2", "txid": id("a")}, "evm": {"amount": "1"}}});
         let back = json!({"id": "r", "amount": "5", "evmAmount": "6", "lock": {"commitTxid": id("d"), "txid": id("e")}, "refund": {"txid": id("f")}});
 
         let (f, r) = (swap(&forward).expect("a swap"), reverse_swap(&back).expect("a swap"));
