@@ -44,8 +44,6 @@ pub trait Chain: Send + Sync {
     fn history<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<ChainTx>>;
     /// One transaction by id. `None`: the explorer answers and does not know it.
     fn tx<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<ChainTx>>;
-    /// Whether an output of a transaction has been spent.
-    fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool>;
     fn outlook(&self) -> Fut<'_, Outlook>;
 }
 
@@ -54,8 +52,9 @@ pub trait Chain: Send + Sync {
 pub trait PoolLog: Send + Sync {
     /// The newest block's number.
     fn tip(&self) -> Fut<'_, u64>;
-    /// Every lock put into the pool in blocks `from` to `to`, both included, oldest first.
-    fn locks(&self, from: u64, to: u64) -> Fut<'_, Vec<PoolLock>>;
+    /// Every lock put into the pool in blocks `from` to `to`, both included, oldest first. `None`: the node answered
+    /// and refused, which for a log is nearly always the range. A request that got no answer is an error.
+    fn locks(&self, from: u64, to: u64) -> Fut<'_, Option<Vec<PoolLock>>>;
 }
 
 /// What only the provider's key can read. Optional: behind it is a tool that holds the key, never this process.
@@ -67,13 +66,6 @@ pub trait Inventory: Send + Sync {
 pub trait LogFeed: Send {
     /// Called once, inside the runtime.
     fn start(self: Box<Self>) -> Receiver<LogEntry>;
-}
-
-/// Whether a transaction paid the reverse key silently, which only that key can tell. Optional: behind it is a tool
-/// that holds the key, in the mode that sends nothing.
-pub trait SilentCheck: Send + Sync {
-    /// The TAC from `txid` waiting at a one-time address of the reverse key. `None`: none of it is this key's to move.
-    fn waiting<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<u128>>;
 }
 
 pub struct Ports {
@@ -88,7 +80,5 @@ pub struct Ports {
     pub pool: Option<Arc<dyn PoolLog>>,
     /// `None`: what needs the key is not shown.
     pub inventory: Option<Arc<dyn Inventory>>,
-    /// `None`: a note that left the main address is never called a silent send.
-    pub silent: Option<Arc<dyn SilentCheck>>,
     pub log: Box<dyn LogFeed>,
 }

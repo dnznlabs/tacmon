@@ -119,10 +119,8 @@ pub struct State {
     pub outlook_ok: bool,
     /// When each transaction now unconfirmed was first seen by this run.
     first_seen: HashMap<String, u64>,
-    /// Transactions at the main address that sent a note elsewhere, and whether one of those notes is still unspent.
-    away: HashMap<String, bool>,
-    /// What the key said of each: the TAC it paid the reverse key silently, or `None` when none of it did.
-    silent: HashMap<String, Option<u128>>,
+    /// When each forward swap now making its pool lock was first seen doing so by this run.
+    locking_since: HashMap<String, u64>,
     /// Whether the pool's log on Ethereum is read at all, what was last read of it, and whether the last read answered.
     pub shows_pool: bool,
     pub pool: Option<PoolScan>,
@@ -194,8 +192,7 @@ impl State {
             outlook: None,
             outlook_ok: false,
             first_seen: HashMap::new(),
-            away: HashMap::new(),
-            silent: HashMap::new(),
+            locking_since: HashMap::new(),
             shows_pool: false,
             pool: None,
             pool_ok: false,
@@ -268,6 +265,14 @@ impl State {
                     // open ones first, then the newest
                     s.sort_by(|a, b| a.closed().cmp(&b.closed()).then(b.created.cmp(&a.created)));
                     self.swaps = s;
+                    // when each was first seen making its pool lock, for as long as it is
+                    let locking: HashSet<&str> = self.swaps.iter().filter(|s| ledger::locking(s)).map(|s| s.id.as_str()).collect();
+                    self.locking_since.retain(|id, _| locking.contains(id.as_str()));
+                    for id in locking {
+                        if !self.locking_since.contains_key(id) {
+                            self.locking_since.insert(id.to_string(), self.now);
+                        }
+                    }
                 }
             }
             Event::Eth(e) => self.eth = e,
@@ -318,16 +323,6 @@ impl State {
                 self.looked.retain(|id, _| wanted.contains(id));
                 self.looked.extend(found.into_iter().filter(|(id, _)| wanted.contains(id)));
                 self.see_unconfirmed();
-            }
-            Event::NotesAway(found) => {
-                self.away.extend(found);
-                // a transaction the address no longer lists is not asked about any more
-                let listed: HashSet<&str> = self.main_txs.iter().flatten().map(|t| t.txid.as_str()).collect();
-                self.away.retain(|id, _| listed.contains(id.as_str()));
-                self.silent.retain(|id, _| listed.contains(id.as_str()));
-            }
-            Event::Silent(id, tac) => {
-                self.silent.insert(id, tac);
             }
             Event::Pool(p) => {
                 self.pool_ok = p.is_some();
@@ -607,15 +602,11 @@ impl State {
             explorer: self.explorer,
             // a bridger's lock is the bridger's to bump: it is on the Transactions page, not on the to-do list
             stuck: &self.ledger().into_iter().filter(|r| r.stuck && r.role != Some(Role::BridgerLock)).collect::<Vec<_>>(),
-            // newest first, as the address lists them: only what the key called a silent send, and only while it waits
-            silent: &self
-                .main_txs
-                .iter()
-                .flatten()
-                .filter(|t| self.away.get(&t.txid) == Some(&true))
-                .filter_map(|t| Some((t.txid.clone(), self.silent.get(&t.txid).copied().flatten()?)))
-                .collect::<Vec<_>>(),
-            lock_waits: &self.pool.as_ref().map(|scan| ledger::lock_waits(&self.swaps, scan, self.now, self.tx_stuck_secs)).unwrap_or_default(),
+            lock_waits: &self
+                .pool
+                .as_ref()
+                .map(|scan| ledger::lock_waits(&self.swaps, scan, &self.locking_since, self.now, self.tx_stuck_secs))
+                .unwrap_or_default(),
             hour_milli: self.outlook.map(|o| o.hour_milli),
             now: self.now,
         })
@@ -1067,24 +1058,5 @@ mod tests {
         st.on_key(Page::Transactions, KeyEvent::from(KeyCode::Enter));
 
         assert_eq!((st.copy.as_deref(), st.pool_ok, st.ledger().len()), (Some(format!("https://eth.example/tx/0x{}", "e".repeat(64)).as_str()), false, 1));
-    }
-
-    #[test]
-    fn only_a_note_the_key_calls_a_silent_send_is_a_normalize_step_and_only_until_it_moves() {
-        let mut st = state();
-        let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
-        let tx = |id: &String| ChainTx { txid: id.clone(), notes_away: vec![0], ..Default::default() };
-        let steps = |st: &State| st.commands().iter().filter(|c| c.contains("normalize")).count();
-        st.apply(Event::MainTxs(Some(vec![tx(&a), tx(&b), tx(&c)])));
-        st.apply(Event::NotesAway(vec![(a.clone(), true), (b.clone(), true), (c.clone(), true)]));
-        let unjudged = steps(&st);
-
-        // the key: a paid the reverse side 200 TAC, b went to someone else, and c has not been judged
-        st.apply(Event::Silent(a.clone(), Some(200 * UNIT)));
-        st.apply(Event::Silent(b.clone(), None));
-        let judged = steps(&st);
-        st.apply(Event::NotesAway(vec![(a.clone(), false)]));
-
-        assert_eq!((unjudged, judged, steps(&st)), (0, 1, 0));
     }
 }

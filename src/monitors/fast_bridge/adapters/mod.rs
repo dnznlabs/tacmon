@@ -23,7 +23,6 @@ pub fn create_ports(cfg: &FastBridgeConfig) -> Ports {
             .map(|p| Arc::new(p) as _),
         chain: (!cfg.btc_explorer.is_empty()).then(|| Arc::new(http::create_http_chain(client, &cfg.btc_explorer)) as _),
         inventory: (!cfg.status_cmd.is_empty()).then(|| Arc::new(local::create_command_inventory(&cfg.status_cmd)) as _),
-        silent: (!cfg.normalize_cmd.is_empty()).then(|| Arc::new(local::create_command_silent(&cfg.normalize_cmd)) as _),
         log: Box::new(local::create_command_log(&cfg.log_cmd)),
     }
 }

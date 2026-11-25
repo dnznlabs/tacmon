@@ -3,7 +3,7 @@
 use super::wire;
 use crate::monitors::fast_bridge::{
     model::{Level, LogEntry, ReverseStock, Swap},
-    ports::{Fut, Inventory, LogFeed, QUEUE, SilentCheck, SwapStore},
+    ports::{Fut, Inventory, LogFeed, QUEUE, SwapStore},
 };
 use anyhow::{Context, bail};
 use std::{
@@ -130,61 +130,25 @@ pub fn create_command_inventory(cmd: &[String]) -> CommandInventory {
     CommandInventory { cmd: cmd.to_vec() }
 }
 
-/// One run of a command that holds the key, with `more` after its own arguments: whether it succeeded, and what it
-/// printed. This process only reads that.
-async fn run(cmd: &[String], more: &[&str], wait: Duration) -> anyhow::Result<(bool, String)> {
-    let Some((prog, args)) = cmd.split_first() else { bail!("the command is empty") };
-    // no stdin: a sudo inside cannot stop to ask for a password, it fails instead
-    let mut child = tokio::process::Command::new(prog)
-        .args(args)
-        .args(more)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
-    let mut out = Vec::new();
-    let stdout = child.stdout.take().context("no stdout")?;
-    let read = async {
-        stdout.take(MAX_STATUS).read_to_end(&mut out).await?;
-        child.wait().await
-    };
-    let status = tokio::time::timeout(wait, read).await.context("the command took too long")??;
-    Ok((status.success(), String::from_utf8_lossy(&out).into_owned()))
-}
-
 impl Inventory for CommandInventory {
+    /// One run of the command. It holds the key; this process only reads what it prints.
     fn reverse_stock(&self) -> Fut<'_, ReverseStock> {
         Box::pin(async move {
-            let (ok, out) = run(&self.cmd, &[], STATUS_WAIT).await?;
-            if !ok {
-                bail!("status_cmd failed");
+            let Some((prog, args)) = self.cmd.split_first() else { bail!("status_cmd is empty") };
+            // no stdin: a sudo inside cannot stop to ask for a password, it fails instead
+            let mut child =
+                tokio::process::Command::new(prog).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn()?;
+            let mut out = Vec::new();
+            let stdout = child.stdout.take().context("no stdout")?;
+            let read = async {
+                stdout.take(MAX_STATUS).read_to_end(&mut out).await?;
+                child.wait().await
+            };
+            let status = tokio::time::timeout(STATUS_WAIT, read).await.context("status_cmd took too long")??;
+            if !status.success() {
+                bail!("status_cmd exited with {status}");
             }
-            wire::reverse_stock(&out).context("status_cmd printed no reverse address and TAC")
-        })
-    }
-}
-
-/// A dry run reads the transaction, then scans what the key holds: slower than a status run.
-const NORMALIZE_WAIT: Duration = Duration::from_secs(600);
-
-pub struct CommandSilent {
-    cmd: Vec<String>,
-}
-
-pub fn create_command_silent(cmd: &[String]) -> CommandSilent {
-    CommandSilent { cmd: cmd.to_vec() }
-}
-
-impl SilentCheck for CommandSilent {
-    /// `--txid <id>` and nothing more: without `--send` the tool moves nothing.
-    fn waiting<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<u128>> {
-        Box::pin(async move {
-            // the id comes from an explorer's list, and goes onto a command line
-            let id = wire::txid_text(txid).context("not a transaction id")?;
-            // the tool exits with a failure when there is nothing to move: what it printed says which kind
-            let (_, out) = run(&self.cmd, &["--txid", &id], NORMALIZE_WAIT).await?;
-            wire::silent_verdict(&out).context("normalize_cmd did not say")
+            wire::reverse_stock(&String::from_utf8_lossy(&out)).context("status_cmd printed no reverse address and TAC")
         })
     }
 }

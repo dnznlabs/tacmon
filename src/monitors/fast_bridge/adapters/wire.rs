@@ -220,8 +220,6 @@ pub fn chain_tx(v: &Value, address: Option<&str>) -> Option<ChainTx> {
     let sats = |o: &Value| o.get("value").and_then(Value::as_u64).unwrap_or(0);
     let list = |key: &str| v.get(key).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
     let outputs = || list("vout").iter().filter(|o| mine(o));
-    let spends_note = address.is_some() && list("vin").iter().filter_map(|i| i.get("prevout")).any(|o| mine(o) && sats(o) <= DUST);
-    let away = |o: &Value| !mine(o) && sats(o) <= DUST && o.get("scriptpubkey_address").is_some_and(Value::is_string);
     Some(ChainTx {
         txid: txid(v, "txid")?,
         fee: v.get("fee")?.as_u64()?,
@@ -231,8 +229,6 @@ pub fn chain_tx(v: &Value, address: Option<&str>) -> Option<ChainTx> {
         received: outputs().map(sats).fold(0, u64::saturating_add),
         sent: list("vin").iter().filter_map(|i| i.get("prevout")).filter(|o| mine(o)).map(sats).fold(0, u64::saturating_add),
         note: outputs().any(|o| sats(o) <= DUST),
-        // a transaction has a handful of outputs: one with more is not asked about past the first few
-        notes_away: if spends_note { (0u32..).zip(list("vout")).filter(|(_, o)| away(o)).map(|(n, _)| n).take(4).collect() } else { Vec::new() },
     })
 }
 
@@ -291,16 +287,6 @@ pub fn reverse_stock(out: &str) -> Option<ReverseStock> {
     // "1 confirmed coin, 30000 sats in all", or "could not be read from any explorer"
     let sats = after("plain sats").and_then(|l| l.split_whitespace().skip_while(|w| !w.ends_with(',')).nth(1)?.parse().ok());
     Some(ReverseStock { address, notes, tac, sats })
-}
-
-/// What tacit's `fastbridge-lp-reverse-normalize.mjs` prints for one transaction when it sends nothing. `Some(Some)`:
-/// that much TAC from it waits to be moved. `Some(None)`: none of it is this key's to move. `None`: it did not say
-/// (no key, an explorer that failed, not confirmed yet), which is no verdict.
-pub fn silent_verdict(out: &str) -> Option<Option<u128>> {
-    if let Some(amount) = out.lines().find_map(|l| l.trim().strip_prefix("would move ")).and_then(|l| decimal_tac(l.split_whitespace().next()?)) {
-        return Some(Some(amount));
-    }
-    ["no TAC from that transaction was found for this key", "already a plain note at the reverse address"].iter().any(|said| out.contains(said)).then_some(None)
 }
 
 /// "2026-11-24T05:51:50.890Z" as seconds since 1970. UTC only, which is what the provider writes.
@@ -740,35 +726,5 @@ plain sats        1 confirmed coin, 30000 sats in all
 
         assert_eq!((named, unnamed.as_str()), (leaf.to_lowercase(), ""));
         assert_eq!(addresses, [Some(format!("0x{}", "ab".repeat(20))), None, None]);
-    }
-
-    #[test]
-    fn a_note_leaving_the_address_is_named_by_its_output_and_one_that_spends_no_note_of_the_address_is_not() {
-        let out = |address: &str, value: u64| json!({"scriptpubkey_address": address, "value": value});
-        let tx = |spent: u64| {
-            json!({"txid": "a".repeat(64), "fee": 200, "weight": 800, "status": {"confirmed": false},
-                "vin": [{"prevout": out("bc1qother", 1046)}, {"prevout": out("bc1qmine", spent)}],
-                "vout": [out("bc1qstranger", 546), out("bc1qmine", 546), out("bc1qstranger", 9_000), {"value": 0}]})
-        };
-
-        let (note, coin) = (chain_tx(&tx(546), Some("bc1qmine")).expect("a transaction"), chain_tx(&tx(5_000), Some("bc1qmine")).expect("a transaction"));
-        let by_id = chain_tx(&tx(546), None).expect("a transaction");
-
-        assert_eq!((note.notes_away, coin.notes_away, by_id.notes_away), (vec![0], vec![], vec![]));
-    }
-
-    #[test]
-    fn a_dry_run_says_how_much_waits_or_that_none_is_this_keys_and_anything_else_is_no_verdict() {
-        let outs = [
-            "found 1 private note from 5f0d…, confirmed: 200.5 TAC (5f0d…:0)\nwould move 200.5 TAC in one transfer to bc1q… (the reverse address, as a plain note)\n",
-            "no TAC from that transaction was found for this key: is it the transaction that paid the reverse tacit1 address, and has it confirmed?",
-            "the TAC from that transaction is already a plain note at the reverse address: there is nothing to move",
-            "the TAC from that transaction has not confirmed yet: run this again once it has",
-            "would move lots TAC",
-        ];
-
-        let verdicts = outs.map(silent_verdict);
-
-        assert_eq!(verdicts, [Some(Some(200 * UNIT + UNIT / 2)), Some(None), Some(None), None, None]);
     }
 }

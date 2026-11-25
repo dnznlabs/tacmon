@@ -98,16 +98,22 @@ pub struct LockWait {
     pub secs: u64,
 }
 
+/// A forward swap that is making its pool lock: the record names the leaf, and the lock is not known to have landed.
+pub fn locking(s: &Swap) -> bool {
+    s.direction == Direction::Forward && s.phase == "locking" && !s.pool_leaf.is_empty()
+}
+
 /// The followed forward swaps that have been making their pool lock for `stuck_secs` or longer while the pool's log
-/// shows none. Only where the log was read back to before the swap began: a lock older than the read is not missing.
-pub fn lock_waits(swaps: &[Swap], scan: &PoolScan, now: u64, stuck_secs: u64) -> Vec<LockWait> {
+/// shows none. `since` is when each was first seen doing so: a swap is not late for the time its Bitcoin leg took.
+/// Only where the log was read back to before the swap began: a lock older than the read is not missing.
+pub fn lock_waits(swaps: &[Swap], scan: &PoolScan, since: &HashMap<String, u64>, now: u64, stuck_secs: u64) -> Vec<LockWait> {
     followed(swaps)
         .into_iter()
-        .filter(|s| s.direction == Direction::Forward && s.phase == "locking" && !s.pool_leaf.is_empty())
+        .filter(|s| locking(s))
         .filter_map(|s| {
-            let secs = now.saturating_sub(s.created);
-            // at most this many blocks since it began, so a read that reaches further back has all of them
-            let covered = scan.since <= scan.tip.saturating_sub(secs / BLOCK_SECS + 1);
+            let secs = now.saturating_sub(*since.get(&s.id)?);
+            // at most this many blocks since the swap began, so a read that reaches further back has all of them
+            let covered = scan.since <= scan.tip.saturating_sub(now.saturating_sub(s.created) / BLOCK_SECS + 1);
             (secs >= stuck_secs && covered && pool_lock(scan, s).is_none()).then(|| LockWait { swap: s.id.clone(), secs })
         })
         .collect()
@@ -240,7 +246,7 @@ mod tests {
         c.to_string().repeat(64)
     }
     fn tx(c: char, height: Option<u64>, received: u64, sent: u64) -> ChainTx {
-        ChainTx { txid: id(c), fee: 430, vsize: 430, height, time: height.map(|h| h * 600), received, sent, note: received == 546, notes_away: Vec::new() }
+        ChainTx { txid: id(c), fee: 430, vsize: 430, height, time: height.map(|h| h * 600), received, sent, note: received == 546 }
     }
     fn swap(n: u64, phase: &str, linked: &[(Role, char)]) -> Swap {
         Swap {
@@ -354,11 +360,28 @@ mod tests {
         let making = |n: u64, leaf: char| Swap { pool_leaf: id(leaf), ..swap(n, "locking", &[]) };
         // began 2,000 s before now, 1,000 s, and 100 s: the last has not waited long
         let swaps = [making(8_000, '1'), making(9_000, '2'), making(9_900, '3'), Swap { phase: "offered".into(), ..making(8_000, '4') }];
+        let since: HashMap<String, u64> = swaps.iter().map(|s| (s.id.clone(), s.created)).collect();
         let read = |since| PoolScan { tip: 1_000, since, locks: vec![lock('2', 'e', 990)] };
 
         // 2,000 s is at most 167 blocks: a read from block 800 has them all, one from block 900 does not
-        let (far, near) = (lock_waits(&swaps, &read(800), 10_000, 900), lock_waits(&swaps, &read(900), 10_000, 900));
+        let (far, near) = (lock_waits(&swaps, &read(800), &since, 10_000, 900), lock_waits(&swaps, &read(900), &since, 10_000, 900));
 
         assert_eq!((far, near), (vec![LockWait { swap: "swap8000".into(), secs: 2_000 }], vec![]));
+    }
+
+    #[test]
+    fn a_lock_is_timed_from_when_the_swap_began_locking_and_not_from_when_the_swap_began() {
+        // the bridger's Bitcoin lock took an hour to confirm: the swap is old, its pool lock is a minute old
+        let swaps = [Swap { pool_leaf: id('1'), ..swap(5_000, "locking", &[]) }];
+        let scan = PoolScan { tip: 1_000, since: 0, locks: vec![] };
+        let seen = |at: u64| HashMap::from([("swap5000".to_string(), at)]);
+
+        let (fresh, late, unseen) = (
+            lock_waits(&swaps, &scan, &seen(9_940), 10_000, 900),
+            lock_waits(&swaps, &scan, &seen(9_000), 10_000, 900),
+            lock_waits(&swaps, &scan, &HashMap::new(), 10_000, 900),
+        );
+
+        assert_eq!((fresh, late, unseen), (vec![], vec![LockWait { swap: "swap5000".into(), secs: 1_000 }], vec![]));
     }
 }

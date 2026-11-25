@@ -39,8 +39,6 @@ pub struct Facts<'a> {
     pub explorer: bool,
     /// The Transactions page's stuck rows, the going fee rate where it is known, and the time.
     pub stuck: &'a [TxRow],
-    /// Transactions that paid the reverse key silently, by the key's own word, with the TAC that still waits to be moved.
-    pub silent: &'a [(String, u128)],
     /// Forward swaps whose pool lock the pool's log does not show after a long wait.
     pub lock_waits: &'a [LockWait],
     pub hour_milli: Option<u64>,
@@ -129,19 +127,6 @@ pub fn upkeep(f: &Facts) -> Upkeep {
             Level::Warn,
             "The reverse side's address is not known. Print it (reads only), then set fast_bridge.reverse_address:",
             vec![format!("{HELPER} status")],
-        ));
-    }
-
-    for (txid, amount) in f.silent {
-        steps.push(step(
-            Level::Warn,
-            format!(
-                "{} TAC was sent to the reverse side silently, in {}: it sits at a one-time address of the reverse key, and the reverse side cannot \
-                 sell it until it is moved onto the reverse address (a dry run first):",
-                tac(*amount),
-                crate::fmt::short(txid, 8, 4)
-            ),
-            vec![format!("{HELPER} normalize --txid {txid}")],
         ));
     }
 
@@ -297,7 +282,6 @@ mod tests {
             explorer: true,
             stuck: &[],
             lock_waits: &[],
-            silent: &[],
             hour_milli: None,
             now: 0,
         }
@@ -463,15 +447,5 @@ mod tests {
         let steps: Vec<&Step> = up.steps.iter().filter(|s| s.text.contains("pool lock")).collect();
         assert_eq!(steps.len(), 1);
         assert!(steps[0].text.contains("for 40m00s") && steps[0].level == Level::Warn && steps[0].cmd.is_empty(), "{}", steps[0].text);
-    }
-
-    #[test]
-    fn tac_the_key_found_sent_silently_is_a_step_with_the_normalize_command() {
-        let (silent, side) = ([(id('a'), 200 * UNIT)], ReverseSide::Off);
-
-        let up = upkeep(&Facts { silent: &silent, ..facts(&[], &[], &[], &side) });
-
-        assert_eq!(cmds(&up, "normalize"), [format!("{HELPER} normalize --txid {}", id('a'))]);
-        assert!(up.steps.iter().any(|s| s.text.starts_with("200.00 TAC was sent to the reverse side silently")));
     }
 }

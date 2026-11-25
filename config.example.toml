@@ -29,7 +29,6 @@ eth_explorer = ""
 btc_explorer = ""
 reverse_address = ""
 status_cmd = []
-normalize_cmd = []
 
 [fast_bridge.refresh]
 lp_secs = 5

@@ -250,9 +250,6 @@ pub struct ChainTx {
     pub sent: u64,
     /// One of those outputs is the size a Tacit note rides on. Whether one does, and for how much, takes the key to tell.
     pub note: bool,
-    /// Its note-sized outputs to other addresses, where it also spends a note-sized coin of the address it was listed
-    /// for: the shape of TAC leaving that address. Where it went, and whether it is TAC at all, takes a key to tell.
-    pub notes_away: Vec<u32>,
 }
 
 impl ChainTx {

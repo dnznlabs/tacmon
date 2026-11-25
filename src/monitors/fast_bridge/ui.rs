@@ -802,6 +802,20 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         })
         .collect();
     let bitcoin = rows.iter().filter(|r| r.place != Place::Pool).count();
+    // the pool's log is read so far back and no further: a lock older than that has no row, and the title says how far
+    let pool = match (&st.pool, st.shows_pool) {
+        (Some(scan), _) => {
+            format!(
+                " · pool locks · {} in {}{}",
+                rows.len() - bitcoin,
+                dur(scan.tip.saturating_sub(scan.since).saturating_mul(12)),
+                read_note(st.pool_ok, true)
+            )
+        }
+        (None, true) => format!(" · pool locks{}", read_note(st.pool_ok, false)),
+        (None, false) => String::new(),
+    };
+    // counts and what is not answering first, the going rate last: a narrow terminal cuts the title from the right
     let title = if st.explorer {
         let going = match (st.outlook, st.outlook_ok) {
             (Some(o), true) => format!(" · about {} sat/vB confirms within the hour", rate(o.hour_milli)),
@@ -812,23 +826,12 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         let read = st.main_txs.is_some() || st.reverse_txs.is_some();
         let failing = !(st.main_txs_ok || st.id.bitcoin_address.is_empty()) || !(st.reverse_txs_ok || st.reverse_address.is_empty()) || !st.lookups_ok;
         format!(
-            " Bitcoin transactions · {bitcoin} · {waiting} unconfirmed{}{going}{} ",
+            " Bitcoin transactions · {bitcoin} · {waiting} unconfirmed{}{}{pool}{going} ",
             if stuck > 0 { format!(" · {stuck} STUCK") } else { String::new() },
             if failing { read_note(false, read) } else { "" }
         )
     } else {
-        format!(" Bitcoin transactions · {bitcoin} from the swap records · set fast_bridge.btc_explorer for their status and your addresses' ")
-    };
-    // the pool's log is read so far back and no further: a lock older than that has no row, and the title says how far
-    let title = match (&st.pool, st.shows_pool) {
-        (Some(scan), _) => format!(
-            "{title}· Ethereum pool locks · {} in the last {}{} ",
-            rows.len() - bitcoin,
-            dur(scan.tip.saturating_sub(scan.since).saturating_mul(12)),
-            read_note(st.pool_ok, true)
-        ),
-        (None, true) => format!("{title}· Ethereum pool locks{} ", read_note(st.pool_ok, false)),
-        (None, false) => title,
+        format!(" Bitcoin transactions · {bitcoin} from the swap records{pool} · set fast_bridge.btc_explorer for their status and your addresses' ")
     };
     let widths = [
         Constraint::Length(15),

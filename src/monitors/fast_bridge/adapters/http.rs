@@ -162,14 +162,23 @@ impl GasBalance for RpcGas {
     }
 }
 
-/// One JSON-RPC call's result. An answer that carries an error, or no result, is a failed read.
-async fn rpc_call(http: &reqwest::Client, rpc: &str, method: &str, params: Value, max: usize) -> Result<Value> {
+/// One JSON-RPC call's result, or `None` when the node answered with an error of its own. Nodes refuse with a 200,
+/// a 400 or a 403, so the body of a failed status is read for one; a redirect's never is.
+async fn rpc_call(http: &reqwest::Client, rpc: &str, method: &str, params: Value, max: usize) -> Result<Option<Value>> {
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-    let mut v = json_within(succeeded(http.post(rpc).json(&body).send().await?)?, max).await?;
-    if let Some(e) = v.get("error").filter(|e| !e.is_null()) {
-        bail!("the RPC refused: {}", e.get("message").and_then(Value::as_str).unwrap_or("no reason given").chars().take(120).collect::<String>());
+    let resp = http.post(rpc).json(&body).send().await?;
+    let status = resp.status();
+    if status.is_redirection() {
+        bail!("answered {status}");
     }
-    v.get_mut("result").map(Value::take).filter(|r| !r.is_null()).context("the RPC answered without a result")
+    let answer = json_within(resp, max).await;
+    if answer.as_ref().is_ok_and(|v| v.get("error").is_some_and(|e| !e.is_null())) {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        bail!("answered {status}");
+    }
+    Ok(Some(answer?.get_mut("result").map(Value::take).filter(|r| !r.is_null()).context("the RPC answered without a result")?))
 }
 
 pub struct RpcPoolLog {
@@ -186,15 +195,18 @@ pub fn create_rpc_pool_log(http: reqwest::Client, rpc: &str, pool: &str) -> Opti
 
 impl PoolLog for RpcPoolLog {
     fn tip(&self) -> Fut<'_, u64> {
-        Box::pin(async move { wire::quantity(&rpc_call(&self.http, &self.rpc, "eth_blockNumber", json!([]), MAX_BODY).await?).context("not a block number") })
+        Box::pin(async move {
+            let tip = rpc_call(&self.http, &self.rpc, "eth_blockNumber", json!([]), MAX_BODY).await?.context("the RPC refused")?;
+            wire::quantity(&tip).context("not a block number")
+        })
     }
-    fn locks(&self, from: u64, to: u64) -> Fut<'_, Vec<PoolLock>> {
+    fn locks(&self, from: u64, to: u64) -> Fut<'_, Option<Vec<PoolLock>>> {
         Box::pin(async move {
             let filter =
                 json!([{ "address": self.pool, "topics": [wire::LOCK_LEAVES_TOPIC], "fromBlock": format!("{from:#x}"), "toBlock": format!("{to:#x}") }]);
             // a day of the pool's locks is some 20 KiB: an answer over the bound fails, since part of a log is not the log
-            let logs = rpc_call(&self.http, &self.rpc, "eth_getLogs", filter, MAX_HISTORY).await?;
-            wire::pool_locks(&logs, &self.pool).context("the RPC answered without a list")
+            let Some(logs) = rpc_call(&self.http, &self.rpc, "eth_getLogs", filter, MAX_HISTORY).await? else { return Ok(None) };
+            Ok(Some(wire::pool_locks(&logs, &self.pool).context("the RPC answered without a list")?))
         })
     }
 }
@@ -238,13 +250,6 @@ impl Chain for HttpChain {
                 bail!("the explorer answered with another transaction");
             }
             Ok(Some(tx))
-        })
-    }
-    fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool> {
-        Box::pin(async move {
-            let id = wire::txid_text(txid).context("not a transaction id")?;
-            let v = get(&self.http, &format!("{}/tx/{id}/outspend/{vout}", self.base)).await?;
-            v.get("spent").and_then(Value::as_bool).context("the explorer answered without saying")
         })
     }
     fn outlook(&self) -> Fut<'_, Outlook> {
@@ -411,16 +416,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_rpc_that_refuses_is_a_failed_read_and_a_pool_that_is_not_an_address_is_never_asked_about() {
-        let refused = serve_once("200 OK".into(), r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"range too wide"},"result":[]}"#).await;
+    async fn a_node_that_refuses_is_told_from_one_that_fails_whatever_status_it_refuses_with() {
+        let error = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"range too wide"},"result":[]}"#;
+        let pool = format!("0x{}", "ab".repeat(20));
+        let ask = |head: &'static str, body: &'static str| {
+            let pool = pool.clone();
+            async move { create_rpc_pool_log(create_http_client(), &serve_once(head.into(), body).await, &pool).expect("an adapter").locks(1, 2).await }
+        };
+
+        let (refused, forbidden, down, moved, read) = (
+            ask("200 OK", error).await,
+            ask("403 Forbidden", error).await,
+            ask("502 Bad Gateway", "<html>").await,
+            ask("307 Temporary Redirect\r\nLocation: http://127.0.0.1:9/", error).await,
+            ask("200 OK", r#"{"jsonrpc":"2.0","id":1,"result":[]}"#).await,
+        );
+
+        assert!(matches!((refused, forbidden, read), (Ok(None), Ok(None), Ok(Some(l))) if l.is_empty()));
+        assert!(down.is_err() && moved.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_tip_is_read_and_a_pool_that_is_not_an_address_is_never_asked_about() {
         let answered = serve_once("200 OK".into(), r#"{"jsonrpc":"2.0","id":1,"result":"0x2a"}"#).await;
         let pool = format!("0x{}", "ab".repeat(20));
 
-        let locks = create_rpc_pool_log(create_http_client(), &refused, &pool).expect("an adapter").locks(1, 2).await;
         let tip = create_rpc_pool_log(create_http_client(), &answered, &pool).expect("an adapter").tip().await;
         let unnamed = create_rpc_pool_log(create_http_client(), &answered, "the pool");
 
-        assert!(locks.is_err_and(|e| e.to_string().contains("range too wide")));
         assert_eq!((tip.ok(), unnamed.is_none()), (Some(42), true));
     }
 }

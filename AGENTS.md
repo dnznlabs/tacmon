@@ -77,7 +77,7 @@ For anyone changing this repo, human or agent.
 - **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee.
 - **The board carries every pair.** An ad or a want is this provider's market only when its asset is the one `/info` names; `State::sift` keeps those and counts the rest.
 - **TAC amounts come from swap records, never from the chain.** An explorer sees sats; a row no swap names shows sats and says a note may ride on it.
-- **What an explorer is asked is bounded and said.** Two addresses, the transactions of `ledger::MAX_SWAPS` swaps, `feed::MAX_LOOKUPS` by id a round, none again once `ledger::SETTLED` deep, and whether a note sent away from the main address is spent for `feed::MAX_AWAY` transactions a round, none again once it is. The Ethereum RPC is asked for the pool's lock log over at most `ledger::POOL_LOOKBACK` blocks, by contract and topic only: whose a lock is gets decided here, from the swap record's leaf, and never by a filter sent to the node. A new kind of request is a change to claim 4 in `SECURITY.md`.
+- **What an explorer is asked is bounded and said.** Two addresses, the transactions of `ledger::MAX_SWAPS` swaps, `feed::MAX_LOOKUPS` by id a round, none again once `ledger::SETTLED` deep. The Ethereum RPC is asked for the pool's lock log over at most `ledger::POOL_LOOKBACK` blocks, by contract and topic only: whose a lock is gets decided here, from the swap record's leaf, and never by a filter sent to the node. A new kind of request is a change to claim 4 in `SECURITY.md`.
 - **Amounts from outside never wrap or truncate.** Sum with `model::total`, multiply through `model::fee_on`, narrow with `try_from`.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.
@@ -119,6 +119,6 @@ A change is not done until the documents describing what it changed are updated 
 - `--snapshot` output has no colour, so a colour-only change cannot be checked with it.
 - `agg` needs a font with braille glyphs or the start screen records blank: pass one in `AGG_FLAGS` (DejaVu Sans Mono has none; DejaVu Sans as a fallback does).
 - A command the Maintenance page prints is built only from values `wire.rs` held to hex, decimal or bech32. A new value in one gets the same check, and a test with shell characters in it.
-- What needs the key comes through the `Inventory` port, behind `status_cmd`, and the `SilentCheck` port, behind `normalize_cmd`: a child process holds the key, tacmon reads its output. The only argument tacmon ever adds to either is `--txid <64 hex>`, which keeps the tool a dry run. Never read `FB_LP_KEY` or the environment file in the crate.
+- What needs the key comes through the `Inventory` port, behind `status_cmd`: a child process holds the key, tacmon reads its output. Never read `FB_LP_KEY` or the environment file in the crate.
 - tacit's upkeep tools exit silently when started through a symlinked path: the helper `cd`s to the real path first.
 - `config.example.toml` is generated: edit the defaults in the `config.rs` files, not the file.
