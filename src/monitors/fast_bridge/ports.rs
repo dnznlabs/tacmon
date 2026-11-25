@@ -1,7 +1,7 @@
 //! What the fast bridge monitor needs from the outside, one trait per capability. The feed and the state
 //! depend on these and never on an adapter: a new transport is a new file in `adapters/` and nothing else.
 
-use super::model::{Ad, Coin, Health, LogEntry, ReverseSide, ReverseStock, Swap, Terms, Want};
+use super::model::{Ad, ChainTx, Coin, Health, LogEntry, Outlook, ReverseSide, ReverseStock, Swap, Terms, Want};
 use anyhow::Result;
 use std::{future::Future, pin::Pin, sync::Arc};
 use tokio::sync::mpsc::Receiver;
@@ -37,9 +37,14 @@ pub trait GasBalance: Send + Sync {
     fn eth<'a>(&'a self, account: &'a str) -> Fut<'a, f64>;
 }
 
-/// What is unspent at a Bitcoin address. Optional: asking sends the address to whoever answers.
+/// The Bitcoin chain, through an explorer. Optional: asking sends the address or the transaction id to whoever answers.
 pub trait Chain: Send + Sync {
     fn unspent<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<Coin>>;
+    /// The address's latest transactions, unconfirmed ones included. Not all of them: an explorer lists the recent ones.
+    fn history<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<ChainTx>>;
+    /// One transaction by id. `None`: the explorer answers and does not know it.
+    fn tx<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<ChainTx>>;
+    fn outlook(&self) -> Fut<'_, Outlook>;
 }
 
 /// What only the provider's key can read. Optional: behind it is a tool that holds the key, never this process.
@@ -59,7 +64,7 @@ pub struct Ports {
     pub swaps: Arc<dyn SwapStore>,
     /// `None`: no ETH balance is read or shown.
     pub gas: Option<Arc<dyn GasBalance>>,
-    /// `None`: no address is looked up and the Maintenance page shows no coins.
+    /// `None`: no address or transaction is looked up: the Maintenance page shows no coins, the Transactions page no status.
     pub chain: Option<Arc<dyn Chain>>,
     /// `None`: what needs the key is not shown.
     pub inventory: Option<Arc<dyn Inventory>>,

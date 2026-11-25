@@ -48,3 +48,4 @@ fee_ladder_bps = [
     500,
 ]
 deadline_warn_secs = 3600
+tx_stuck_secs = 1800

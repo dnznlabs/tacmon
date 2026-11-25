@@ -37,6 +37,10 @@ pub trait Monitor {
     /// What this instance is watching (a provider's name), shown beside the title.
     fn subject(&self) -> String;
     fn pages(&self) -> &'static [&'static str];
+    /// Other names `--snapshot` takes for a page, each with the page's place: a tab that was renamed keeps its old name here.
+    fn page_aliases(&self) -> &'static [(&'static str, usize)] {
+        &[]
+    }
     /// Starts the readers. Called once, inside the runtime, before the first draw.
     fn start(&mut self, wake: Wake);
     /// Takes in what the readers have sent since the last call. Called before every draw.

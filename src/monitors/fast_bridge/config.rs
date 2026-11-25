@@ -17,8 +17,9 @@ pub struct FastBridgeConfig {
     pub eth_rpc: String,
     /// The pool account, when it should not be learned from the log.
     pub pool_account: String,
-    /// An Esplora API (`https://mempool.space/api`) to read the coins at the provider's Bitcoin addresses from.
-    /// Empty: not read, and the addresses are sent nowhere.
+    /// An Esplora API (`https://mempool.space/api`) to read the coins and transactions at the provider's Bitcoin
+    /// addresses, and the status of its recent swaps' transactions, from. Empty: not read, and neither the addresses
+    /// nor the transaction ids are sent anywhere.
     pub btc_explorer: String,
     /// The reverse side's Bitcoin address, for before the side is on: the log names it once it is.
     pub reverse_address: String,
@@ -47,6 +48,8 @@ pub struct Advisor {
     pub fee_ladder_bps: Vec<u64>,
     /// A swap's deadline turns red when it is closer than this.
     pub deadline_warn_secs: u64,
+    /// A Bitcoin transaction unconfirmed for longer than this is marked as stuck.
+    pub tx_stuck_secs: u64,
 }
 
 impl Default for FastBridgeConfig {
@@ -76,6 +79,6 @@ impl Default for Refresh {
 
 impl Default for Advisor {
     fn default() -> Self {
-        Self { fee_ladder_bps: vec![10, 30, 50, 100, 150, 200, 300, 500], deadline_warn_secs: 3600 }
+        Self { fee_ladder_bps: vec![10, 30, 50, 100, 150, 200, 300, 500], deadline_warn_secs: 3600, tx_stuck_secs: 1800 }
     }
 }

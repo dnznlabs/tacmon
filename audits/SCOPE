@@ -27,6 +27,7 @@ src/monitors/fast_bridge/adapters/wire.rs
 src/monitors/fast_bridge/advisor.rs
 src/monitors/fast_bridge/config.rs
 src/monitors/fast_bridge/feed.rs
+src/monitors/fast_bridge/ledger.rs
 src/monitors/fast_bridge/model.rs
 src/monitors/fast_bridge/mod.rs
 src/monitors/fast_bridge/ports.rs

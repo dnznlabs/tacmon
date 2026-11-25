@@ -2,7 +2,7 @@
 
 use super::wire;
 use crate::monitors::fast_bridge::{
-    model::{Ad, Coin, Health, ReverseSide, Terms, Want},
+    model::{Ad, ChainTx, Coin, Health, Outlook, ReverseSide, Terms, Want},
     ports::{Board, Chain, Fut, GasBalance, Provider},
 };
 use anyhow::{Context, Result, bail};
@@ -16,26 +16,34 @@ const MAX_BODY: usize = 256 << 10;
 /// The most entries taken from one board list. The public board holds tens; past this it is a flood, not demand.
 const MAX_ITEMS: usize = 5_000;
 
+/// The most an address's transaction list may hold. An explorer lists up to 75, and one that moves a Tacit note is
+/// about 6 KiB with its witness, so the list does not fit in `MAX_BODY`.
+const MAX_HISTORY: usize = 1 << 20;
+
 /// No redirects: a 3xx would send a request, and the pool account in it, to a host the operator never named.
 pub fn create_http_client() -> reqwest::Client {
     reqwest::Client::builder().timeout(Duration::from_secs(8)).redirect(reqwest::redirect::Policy::none()).user_agent("tacmon").build().expect("http client")
 }
 
-fn keep(body: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
-    if body.len() + chunk.len() > MAX_BODY {
-        bail!("the answer is over {MAX_BODY} bytes");
+fn keep(body: &mut Vec<u8>, chunk: &[u8], max: usize) -> Result<()> {
+    if body.len() + chunk.len() > max {
+        bail!("the answer is over {max} bytes");
     }
     body.extend_from_slice(chunk);
     Ok(())
 }
 
-/// The JSON body, read in pieces so one that never ends is dropped at `MAX_BODY` and not held in memory.
-async fn json_body(mut resp: reqwest::Response) -> Result<Value> {
+/// The JSON body, read in pieces so one that never ends is dropped at `max` and not held in memory.
+async fn json_within(mut resp: reqwest::Response, max: usize) -> Result<Value> {
     let mut body = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
-        keep(&mut body, &chunk)?;
+        keep(&mut body, &chunk, max)?;
     }
     Ok(serde_json::from_slice(&body)?)
+}
+
+async fn json_body(resp: reqwest::Response) -> Result<Value> {
+    json_within(resp, MAX_BODY).await
 }
 
 /// Only a 2xx is an answer. A redirect is not followed, and the body that comes with one is not read as the answer either.
@@ -172,6 +180,36 @@ impl Chain for HttpChain {
             wire::coins(&get(&self.http, &format!("{}/address/{address}/utxo", self.base)).await?).context("the explorer answered without a list")
         })
     }
+    fn history<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<ChainTx>> {
+        Box::pin(async move {
+            let address = wire::btc_address(address).context("not a Bitcoin address")?;
+            let resp = succeeded(self.http.get(format!("{}/address/{address}/txs", self.base)).send().await?)?;
+            wire::history(&json_within(resp, MAX_HISTORY).await?, &address).context("the explorer answered without a list")
+        })
+    }
+    fn tx<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<ChainTx>> {
+        Box::pin(async move {
+            // the id comes from a swap record, which carries what a counterparty supplied, and goes into a URL path
+            let id = wire::txid_text(txid).context("not a transaction id")?;
+            let resp = self.http.get(format!("{}/tx/{id}", self.base)).send().await?;
+            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
+            let tx = wire::chain_tx(&json_body(succeeded(resp)?).await?, None).context("the explorer answered without a transaction")?;
+            // an answer about another transaction is not an answer about this one
+            if tx.txid != id {
+                bail!("the explorer answered with another transaction");
+            }
+            Ok(Some(tx))
+        })
+    }
+    fn outlook(&self) -> Fut<'_, Outlook> {
+        Box::pin(async move {
+            let (tip, fees) = (format!("{}/blocks/tip/height", self.base), format!("{}/fee-estimates", self.base));
+            let (tip, fees) = tokio::try_join!(get(&self.http, &tip), get(&self.http, &fees))?;
+            wire::outlook(&tip, &fees).context("the explorer answered without a height or a fee estimate")
+        })
+    }
 }
 
 #[cfg(test)]
@@ -288,11 +326,42 @@ mod tests {
         assert!(timeout(Duration::from_millis(200), listener.accept()).await.is_err(), "the explorer was asked");
     }
 
+    #[tokio::test]
+    async fn an_id_that_is_not_one_is_never_put_in_a_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("a port");
+        let base = format!("http://{}", listener.local_addr().expect("an address"));
+
+        let read = create_http_chain(create_http_client(), &base).tx("../address/x/txs").await;
+
+        assert!(read.is_err());
+        assert!(timeout(Duration::from_millis(200), listener.accept()).await.is_err(), "the explorer was asked");
+    }
+
+    #[tokio::test]
+    async fn a_transaction_the_explorer_does_not_know_is_not_a_failed_read_and_another_one_is_not_the_answer() {
+        let id = "ab".repeat(32);
+        let other: &'static str = Box::leak(format!(r#"{{"txid":"{}","fee":1,"weight":4,"status":{{"confirmed":true}}}}"#, "cd".repeat(32)).into_boxed_str());
+        let (unknown, wrong, failing) = (
+            serve_once("404 Not Found".into(), "Transaction not found").await,
+            serve_once("200 OK".into(), other).await,
+            serve_once("500 Oops".into(), "{}").await,
+        );
+        let ask = |base: String| {
+            let id = id.clone();
+            async move { create_http_chain(create_http_client(), &base).tx(&id).await }
+        };
+
+        let (unknown, wrong, failing) = (ask(unknown).await, ask(wrong).await, ask(failing).await);
+
+        assert_eq!(unknown.ok(), Some(None));
+        assert!(wrong.is_err() && failing.is_err());
+    }
+
     #[test]
     fn a_body_over_the_limit_is_refused_before_it_is_kept() {
         let mut body = vec![0; MAX_BODY - 1];
 
-        let (fits, over) = (keep(&mut body, &[0]).is_ok(), keep(&mut body, &[0]).is_err());
+        let (fits, over) = (keep(&mut body, &[0], MAX_BODY).is_ok(), keep(&mut body, &[0], MAX_BODY).is_err());
 
         assert_eq!((fits, over, body.len()), (true, true, MAX_BODY));
     }

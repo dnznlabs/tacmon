@@ -18,7 +18,7 @@ It watches a service that holds funds. It never holds them itself.
 | reads the provider's local API, swap records of both directions and log | read, ask for or store a private key |
 | reads the public board over HTTPS | sign or send a transaction |
 | optionally asks one Ethereum RPC for one balance | write to the provider's data directory, or to any file |
-| optionally asks one Bitcoin explorer what is unspent at the provider's two addresses | call the provider's write endpoints |
+| optionally asks one Bitcoin explorer what is unspent and what has happened lately at the provider's two addresses, how its recent swaps' transactions stand, and the going fee rate | call the provider's write endpoints |
 | runs the log command, and the status command where one is set, that the operator configured | run the commands its Maintenance page prints |
 
 `scripts/helpers/fast-bridge` is the exception to the left-hand column, kept outside the binary. It is a shell script the
@@ -65,11 +65,11 @@ These are what the review is told to break. Each names what holds it up.
 | 1 | The binary reads, requests and stores no private key. `scripts/helpers/fast-bridge` reads the provider's, and passes it only to the environment of the tacit tool it runs. | review; there is no code path in the crate that takes one |
 | 2 | Nothing is written to disk and no service is changed: every request is a read. | review |
 | 3 | No `unsafe` in this crate. | `#![forbid(unsafe_code)]`, enforced by the compiler; `make audit-checks` |
-| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer is sent the provider's main and reverse addresses and nothing else, and only an address that reads as one goes into its URL. `--demo` makes none. | tests; review |
+| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. `--demo` makes none. | tests; review |
 | 5 | The only processes started are `log_cmd` and, where set, `status_cmd`, each with its arguments passed as a list and never through a shell, with no stdin, and a status run's output held to 64 KiB and three minutes. | tests; review |
 | 6 | TLS is rustls with the platform's certificate checks; there is no way to switch verification off. | `deny.toml` bans other TLS stacks; review |
-| 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. The one escape tacmon writes itself is OSC 52, to copy a Maintenance command: its text is built only from the values claim 11 holds, stripped of control characters other than newlines, capped at 8 KiB, and sent base64-encoded. | a test that draws control characters; review |
-| 8 | No input from an untrusted source can panic the process, hang it or grow memory without bound: an answer is refused over 256 KiB, a log line is cut at 64 KiB, a swap record is skipped over 1 MiB and a link is never read as one, readers wait on bounded queues, and amounts that would overflow stop at the largest value. | tests; review; the `panic-surface` report lists every place a panic could start |
+| 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. The one escape tacmon writes itself is OSC 52, to copy a Maintenance command or a transaction's explorer link: its text is built only from the values claim 11 holds and, for a link, the explorer address in the config, stripped of control characters other than newlines, capped at 8 KiB, and sent base64-encoded. | a test that draws control characters; review |
+| 8 | No input from an untrusted source can panic the process, hang it or grow memory without bound: an answer is refused over 256 KiB (an address's transaction list over 1 MiB), a log line is cut at 64 KiB, a swap record is skipped over 1 MiB and a link is never read as one, readers wait on bounded queues, and amounts that would overflow stop at the largest value. | tests; review; the `panic-surface` report lists every place a panic could start |
 | 9 | A read that fails shows as failed. A stale or missing value is never drawn as a fresh one: a failed status or an answer without terms is a failed read, a figure nothing has reported is a dash and never a zero, and a figure taken from the log says so and gives its age. | tests; review |
 | 10 | Dependencies come from crates.io, carry no known advisory, and use permissive licences. | `cargo-deny` against `deny.toml` |
 | 11 | A command the Maintenance page prints carries nothing a shell would read as more than a word: transaction ids are 64 hex digits, addresses lower-case bech32, amounts and output numbers decimal. Anything else from a source is dropped, not quoted. | tests; review |
@@ -105,6 +105,12 @@ The method, its limits and every past review are in [`audits/`](audits/README.md
   are dry runs, and the tools they run check every coin named against the explorers themselves before spending it,
   so a false coin ends in an error, not a send. A false list can still hide a coin or suggest a move that is not
   needed.
+- **An address's transaction list pushed over its limit.** The list carries every input's witness, so anyone can pay
+  dust to an address from transactions large enough to put its latest 75 over 1 MiB. The read then fails, and shows as
+  failed, until newer transactions push them out; swap transactions are still asked about by id meanwhile.
+- **A false status from the explorer.** The Transactions page believes what the explorer says of a transaction: it
+  can call a confirmed one stuck, or a stuck one confirmed. It moves nothing on that word; a bump is the operator's,
+  through a tool that reads the chain itself.
 - **Which output of a take holds its TAC.** That takes the key to tell. The page names every note-sized output of a
   take and leaves the choice to `fund`, and counts a take only while all its outputs are unspent.
 - Bugs in dependencies that no advisory describes yet.

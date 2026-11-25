@@ -95,9 +95,11 @@ impl Shell {
             self.at = self.monitors.iter().position(|m| m.id().eq_ignore_ascii_case(id)).ok_or_else(|| anyhow!("no monitor called \"{id}\""))?;
         }
         let pages = self.monitors[self.at].pages();
+        let alias = || self.monitors[self.at].page_aliases().iter().find(|(name, at)| name.eq_ignore_ascii_case(page) && *at < pages.len()).map(|(_, at)| *at);
         self.page = pages
             .iter()
             .position(|p| p.eq_ignore_ascii_case(page))
+            .or_else(alias)
             .ok_or_else(|| anyhow!("no page called \"{page}\" (pages: {})", pages.join(", ").to_lowercase()))?;
         Ok(())
     }

@@ -4,7 +4,11 @@
 //! in one is a transaction id, an index, an amount or an address the wire readers have already held to a character
 //! set no shell reads anything into.
 
-use super::model::{Coin, Direction, Level, ReverseSide, Swap, UNIT, tac};
+use super::{
+    ledger::{Place, TxRow},
+    model::{Coin, Direction, Level, ReverseSide, Swap, UNIT, rate, tac},
+};
+use crate::fmt::dur;
 
 /// Run from the tacmon checkout.
 pub const HELPER: &str = "scripts/helpers/fast-bridge";
@@ -33,6 +37,10 @@ pub struct Facts<'a> {
     pub free: Option<u128>,
     pub forward_min: Option<u128>,
     pub explorer: bool,
+    /// The Transactions page's stuck rows, the going fee rate where it is known, and the time.
+    pub stuck: &'a [TxRow],
+    pub hour_milli: Option<u64>,
+    pub now: u64,
 }
 
 /// The TAC a finished forward swap left at the main address. It is in one of `vouts`: which one takes the key to tell,
@@ -118,6 +126,32 @@ pub fn upkeep(f: &Facts) -> Upkeep {
             "The reverse side's address is not known. Print it (reads only), then set fast_bridge.reverse_address:",
             vec![format!("{HELPER} status")],
         ));
+    }
+
+    for t in f.stuck {
+        let what = match (t.role, &t.swap, t.place) {
+            (Some(role), Some((id, _)), _) => format!("The {} of swap {}", role.label(), crate::fmt::short(id, 8, 4)),
+            (_, _, Place::Both) => "A transfer between your two addresses".to_string(),
+            (_, _, Place::Reverse) => "A transaction at the reverse address".to_string(),
+            _ => "A transaction at the main address".to_string(),
+        };
+        let waited = t.at.map_or_else(String::new, |at| format!(" for {}", dur(f.now.saturating_sub(at))));
+        let paying = match (t.rate_milli, f.hour_milli) {
+            (Some(r), Some(h)) if t.slow => format!(", paying {} sat/vB where about {} confirms within the hour", rate(r), rate(h)),
+            (Some(r), _) => format!(", paying {} sat/vB", rate(r)),
+            _ => String::new(),
+        };
+        let text = format!("{what} has been unconfirmed{waited}{paying}: {}.", t.txid);
+        // the helper's bump replaces what the reverse key sent, and nothing else
+        steps.push(if t.spends_reverse {
+            step(
+                Level::Warn,
+                format!("{text} The reverse key sent it, so it can be bumped (a dry run first):"),
+                vec![format!("{HELPER} bump --txid {}", t.txid)],
+            )
+        } else {
+            step(Level::Warn, format!("{text} Only the wallet that sent it can bump it."), vec![])
+        });
     }
 
     let topup = pick(&coins, &TOPUP_COIN, None);
@@ -231,6 +265,9 @@ mod tests {
             free: None,
             forward_min: None,
             explorer: true,
+            stuck: &[],
+            hour_milli: None,
+            now: 0,
         }
     }
     fn cmds(u: &Upkeep, verb: &str) -> Vec<String> {
@@ -351,5 +388,37 @@ mod tests {
         let out = amounts.map(tac_arg);
 
         assert_eq!(out, ["23", "2.5", "252.89340101", "0.00000001"]);
+    }
+
+    #[test]
+    fn a_stuck_transaction_is_a_step_and_only_one_the_reverse_key_sent_gets_the_bump_command() {
+        use crate::monitors::fast_bridge::ledger::{Place, Status, TxRow};
+        let row = |c: char, spends_reverse| TxRow {
+            txid: id(c),
+            place: Place::Reverse,
+            role: None,
+            swap: None,
+            tac: None,
+            sats: Some(546),
+            note: true,
+            status: Status::Unconfirmed,
+            rate_milli: Some(1_160),
+            at: Some(400),
+            slow: true,
+            stuck: true,
+            spends_reverse,
+        };
+        let (stuck, side) = ([row('a', false), row('b', true)], ReverseSide::Off);
+
+        let up = upkeep(&Facts { stuck: &stuck, hour_milli: Some(1_690), now: 1_000, ..facts(&[], &[], &[], &side) });
+
+        let steps: Vec<&Step> = up.steps.iter().filter(|s| s.text.contains("unconfirmed")).collect();
+        assert_eq!(steps.len(), 2);
+        assert!(
+            steps[0].text.contains("for 10m00s, paying 1.16 sat/vB where about 1.69 confirms within the hour") && steps[0].cmd.is_empty(),
+            "{}",
+            steps[0].text
+        );
+        assert_eq!(steps[1].cmd, [format!("{HELPER} bump --txid {}", id('b'))]);
     }
 }

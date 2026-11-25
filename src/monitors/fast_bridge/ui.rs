@@ -3,6 +3,7 @@
 use super::{advisor, upkeep};
 use super::{
     advisor::{Flag, HIGH_FEE_BPS, Standing, all_in},
+    ledger::{Place, Status},
     model::*,
     state::{Page, State},
 };
@@ -186,6 +187,7 @@ pub fn page(f: &mut Frame, area: Rect, page: Page, st: &State, th: &Theme) {
         Page::Market => market(f, area, st, th),
         Page::Advisor => advisor(f, area, st, th),
         Page::Maintenance => maintenance(f, area, st, th),
+        Page::Transactions => transactions(f, area, st, th),
     }
 }
 
@@ -732,6 +734,113 @@ fn maintenance(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
     f.render_widget(table(title, &["     SATS", "COIN", "FOR"], coins, &widths, th), coins_area);
 }
 
+/// "+30,000" or "-546": sats with their sign, grouped in thousands.
+fn signed_sats(n: i128) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::from(if n < 0 { "-" } else { "+" });
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
+    let rows = st.ledger();
+    let (waiting, stuck) = (rows.iter().filter(|r| r.status == Status::Unconfirmed).count(), rows.iter().filter(|r| r.stuck).count());
+    let picked = st.tx_picked(&rows);
+    let cells: Vec<Row> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let place = match r.place {
+                Place::Main => "main",
+                Place::Reverse => "reverse",
+                Place::Both => "main+reverse",
+                Place::Elsewhere => "—",
+            };
+            // one no swap names is told by which way the sats went
+            let what = match (r.role, r.sats) {
+                (Some(role), _) => role.label(),
+                (None, _) if r.place == Place::Both => "transfer",
+                (None, Some(n)) if n >= 0 => "received",
+                (None, _) => "sent",
+            };
+            let swap = r.swap.as_ref().map_or_else(|| Cell::from("—").style(th.dim()), |(id, way)| Cell::from(format!("{} {}", short(id, 8, 0), way.label())));
+            // the TAC is the swap record's word, the sats the explorer's: an explorer cannot see TAC
+            let amount = match (r.tac, r.sats) {
+                (Some(t), _) => format!("{} TAC", tac(t)),
+                (None, Some(n)) => format!("{} sats{}", signed_sats(n), if r.note { " · note" } else { "" }),
+                (None, None) => "—".into(),
+            };
+            let status = match (r.status, r.stuck) {
+                (Status::Unconfirmed, true) => Cell::from("▲ unconfirmed · stuck").style(Style::new().fg(th.bad).add_modifier(Modifier::BOLD)),
+                (Status::Unconfirmed, false) => Cell::from("unconfirmed").style(Style::new().fg(th.warn)),
+                (Status::Confirmed(Some(n)), _) if n >= super::ledger::SETTLED => {
+                    Cell::from(format!("● confirmed · {}+", super::ledger::SETTLED)).style(Style::new().fg(th.good))
+                }
+                (Status::Confirmed(Some(n)), _) => Cell::from(format!("● confirmed · {n}")).style(Style::new().fg(th.good)),
+                (Status::Confirmed(None), _) => Cell::from("● confirmed").style(Style::new().fg(th.good)),
+                (Status::Missing, _) => Cell::from("✕ not found").style(Style::new().fg(th.warn)),
+                (Status::Unknown, _) => Cell::from("?").style(th.dim()),
+            };
+            let fee = r.rate_milli.map_or_else(|| right("—".into()), |m| right(rate(m)).style(if r.slow { Style::new().fg(th.bad) } else { Style::new() }));
+            // an unconfirmed one is timed from when this run first saw it, which is all tacmon can know
+            let age = match (r.status, r.at) {
+                (Status::Unconfirmed, Some(at)) => format!("seen {}", dur(st.now.saturating_sub(at))),
+                (_, Some(at)) => dur(st.now.saturating_sub(at)),
+                _ => "—".into(),
+            };
+            // the picked row is marked by shape as well as colour, so it reads in a snapshot too
+            let this = picked == Some(i);
+            let id = Cell::from(format!("{}{}", if this { "▶ " } else { "  " }, short(&r.txid, 8, 4)));
+            let row = Row::new(vec![id, Cell::from(place), Cell::from(what), swap, right(amount), status, fee, Cell::from(age)]);
+            if this { row.style(Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED)) } else { row }
+        })
+        .collect();
+    let title = if st.explorer {
+        let going = match (st.outlook, st.outlook_ok) {
+            (Some(o), true) => format!(" · about {} sat/vB confirms within the hour", rate(o.hour_milli)),
+            (Some(o), false) => format!(" · about {} sat/vB confirmed within the hour when last read", rate(o.hour_milli)),
+            (None, _) => String::new(),
+        };
+        // any of the explorer's answers failing leaves a part of the page as it last was
+        let read = st.main_txs.is_some() || st.reverse_txs.is_some();
+        let failing = !(st.main_txs_ok || st.id.bitcoin_address.is_empty()) || !(st.reverse_txs_ok || st.reverse_address.is_empty()) || !st.lookups_ok;
+        format!(
+            " Bitcoin transactions · {} · {waiting} unconfirmed{}{going}{} ",
+            rows.len(),
+            if stuck > 0 { format!(" · {stuck} STUCK") } else { String::new() },
+            if failing { read_note(false, read) } else { "" }
+        )
+    } else {
+        format!(" Bitcoin transactions · {} from the swap records · set fast_bridge.btc_explorer for their status and your addresses' ", rows.len())
+    };
+    let widths = [
+        Constraint::Length(15),
+        Constraint::Length(12),
+        Constraint::Length(14),
+        Constraint::Length(18),
+        Constraint::Length(22),
+        Constraint::Length(21),
+        Constraint::Length(7),
+        Constraint::Fill(1),
+    ];
+    f.render_widget(
+        table(
+            title,
+            &["  TX", "AT", "WHAT", "SWAP", "                AMOUNT", "STATUS", " SAT/VB", "AGE"],
+            // the window follows the pick: two lines of border and one of headings are not rows
+            window(cells, picked.unwrap_or(0).saturating_sub(usize::from(area.height.saturating_sub(4)))),
+            &widths,
+            th,
+        ),
+        area,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,5 +871,14 @@ mod tests {
         let lines = flow(groups, 8);
 
         assert_eq!(text(&lines), ["ab", "a group far too wide", "cd"]);
+    }
+
+    #[test]
+    fn sats_are_signed_and_grouped() {
+        let amounts = [30_000, -546, 0, 1_234_567];
+
+        let out = amounts.map(signed_sats);
+
+        assert_eq!(out, ["+30,000", "-546", "+0", "+1,234,567"]);
     }
 }

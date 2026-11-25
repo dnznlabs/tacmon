@@ -40,6 +40,7 @@ For anyone changing this repo, human or agent.
 | `src/monitors/fast_bridge/feed.rs` | one task per port, sending events |
 | `src/monitors/fast_bridge/state.rs` | what the pages draw, and what each event does to it |
 | `src/monitors/fast_bridge/advisor.rs` | fee and size arithmetic, pure |
+| `src/monitors/fast_bridge/ledger.rs` | the Bitcoin transactions of the swaps and the addresses as rows, and which are stuck, pure |
 | `src/monitors/fast_bridge/upkeep.rs` | what keeping the provider stocked takes now, and the commands for it, pure |
 | `src/monitors/fast_bridge/ui.rs` | the header and one function per page |
 | `scripts/helpers/fast-bridge` | runs tacit's upkeep tools with the provider's key: the one file here that handles a key |
@@ -75,6 +76,8 @@ For anyone changing this repo, human or agent.
 - **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering. A failed status, or an answer missing what it must carry, is a failed read.
 - **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee.
 - **The board carries every pair.** An ad or a want is this provider's market only when its asset is the one `/info` names; `State::sift` keeps those and counts the rest.
+- **TAC amounts come from swap records, never from the chain.** An explorer sees sats; a row no swap names shows sats and says a note may ride on it.
+- **What an explorer is asked is bounded and said.** Two addresses, the transactions of `ledger::MAX_SWAPS` swaps, `feed::MAX_LOOKUPS` by id a round, none again once `ledger::SETTLED` deep. A new kind of request is a change to claim 4 in `SECURITY.md`.
 - **Amounts from outside never wrap or truncate.** Sum with `model::total`, multiply through `model::fee_on`, narrow with `try_from`.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.

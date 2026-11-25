@@ -4,7 +4,8 @@
 use crate::{
     fmt::short,
     monitors::fast_bridge::model::{
-        Ad, Asset, Capacity, Coin, Direction, Health, Identity, Level, LogEntry, ReverseSide, ReverseStock, Signal, Swap, Terms, UNIT, Want, tac,
+        Ad, Asset, Capacity, ChainTx, Coin, DUST, Direction, Health, Identity, Level, LogEntry, Outlook, ReverseSide, ReverseStock, Role, Signal, Swap, Terms,
+        UNIT, Want, tac,
     },
 };
 use serde_json::Value;
@@ -45,10 +46,19 @@ fn text(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// A transaction id: 64 hex digits, lower case. These end up in commands the operator runs, so nothing else is kept.
-fn txid(v: &Value, key: &str) -> Option<String> {
-    let id = v.get(key)?.as_str()?;
+/// A transaction id: 64 hex digits, lower case. These end up in commands the operator runs and in an explorer's
+/// URL, so nothing else is kept.
+pub fn txid_text(id: &str) -> Option<String> {
     (id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())).then(|| id.to_ascii_lowercase())
+}
+
+fn txid(v: &Value, key: &str) -> Option<String> {
+    txid_text(v.get(key)?.as_str()?)
+}
+
+/// The transactions a record names, in the order they happen. One it does not name yet, or names unreadably, is left out.
+fn linked(v: &Value, named: &[(Role, Option<&str>, &str)]) -> Vec<(Role, String)> {
+    named.iter().filter_map(|(role, inside, key)| Some((*role, txid(inside.map_or(Some(v), |k| v.get(k))?, key)?))).collect()
 }
 
 /// A bech32 Bitcoin address, or `None`. These end up in commands too: the character set rules out anything a shell reads.
@@ -89,6 +99,13 @@ pub fn swap(v: &Value) -> Option<Swap> {
         gets: offer.get("evm")?.get("amount").and_then(units)?,
         lock_txid: text(v, "lockTxid"),
         take_txid: v.get("take").and_then(|t| txid(t, "txid")).unwrap_or_default(),
+        // the lock is named twice, in the offer and once the provider has seen it: the same transaction
+        linked: txid(v, "lockTxid")
+            .or_else(|| txid(offer.get("btc")?, "txid"))
+            .map(|id| (Role::BridgerLock, id))
+            .into_iter()
+            .chain(linked(v, &[(Role::TakeCommit, Some("take"), "commitTxid"), (Role::Take, Some("take"), "txid")]))
+            .collect(),
     })
 }
 
@@ -106,6 +123,15 @@ pub fn reverse_swap(v: &Value) -> Option<Swap> {
         gets: v.get("amount").and_then(units)?,
         lock_txid: v.get("lock").map(|l| text(l, "txid")).unwrap_or_default(),
         take_txid: String::new(),
+        linked: linked(
+            v,
+            &[
+                (Role::LockCommit, Some("lock"), "commitTxid"),
+                (Role::Lock, Some("lock"), "txid"),
+                (Role::Refund, Some("refund"), "txid"),
+                (Role::TakeRefund, Some("takeRefund"), "txid"),
+            ],
+        ),
     })
 }
 
@@ -130,6 +156,41 @@ pub fn coins(v: &Value) -> Option<Vec<Coin>> {
             })
             .collect(),
     )
+}
+
+/// One transaction as an explorer gives it. With `address`, what it pays to and spends from that address is summed.
+/// `None` without a readable id, fee or weight: a transaction with no fee rate cannot be judged stuck or not.
+pub fn chain_tx(v: &Value, address: Option<&str>) -> Option<ChainTx> {
+    let status = v.get("status");
+    let confirmed = status.and_then(|s| s.get("confirmed")).and_then(Value::as_bool).unwrap_or(false);
+    let at = |s: &Value, key: &str| if confirmed { s.get(key).and_then(Value::as_u64) } else { None };
+    let mine = |o: &Value| address.is_some() && o.get("scriptpubkey_address").and_then(Value::as_str) == address;
+    let sats = |o: &Value| o.get("value").and_then(Value::as_u64).unwrap_or(0);
+    let list = |key: &str| v.get(key).and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let outputs = || list("vout").iter().filter(|o| mine(o));
+    Some(ChainTx {
+        txid: txid(v, "txid")?,
+        fee: v.get("fee")?.as_u64()?,
+        vsize: v.get("weight")?.as_u64()?.div_ceil(4),
+        height: status.and_then(|s| at(s, "block_height")),
+        time: status.and_then(|s| at(s, "block_time")),
+        received: outputs().map(sats).fold(0, u64::saturating_add),
+        sent: list("vin").iter().filter_map(|i| i.get("prevout")).filter(|o| mine(o)).map(sats).fold(0, u64::saturating_add),
+        note: outputs().any(|o| sats(o) <= DUST),
+    })
+}
+
+/// An explorer's list of an address's transactions. An entry that cannot be read is dropped.
+pub fn history(v: &Value, address: &str) -> Option<Vec<ChainTx>> {
+    Some(v.as_array()?.iter().filter_map(|t| chain_tx(t, Some(address))).collect())
+}
+
+/// The tip's height and the explorer's fee estimates (sats per virtual byte, by blocks to wait). `None` without the
+/// height or the six-block estimate.
+pub fn outlook(tip: &Value, fees: &Value) -> Option<Outlook> {
+    let hour = fees.get("6")?.as_f64().filter(|r| r.is_finite() && *r >= 0.0)?;
+    // a float-to-integer cast stops at the largest value, it never wraps
+    Some(Outlook { tip: tip.as_u64()?, hour_milli: (hour * 1000.0).round() as u64 })
 }
 
 pub fn want(v: &Value) -> Want {
@@ -530,5 +591,52 @@ plain sats        1 confirmed coin, 30000 sats in all
         let e = log_line(raw).expect("an entry");
 
         assert_eq!((e.msg.as_str(), e.level), ("Error: connect ECONNREFUSED", Level::Info));
+    }
+
+    #[test]
+    fn a_record_names_its_transactions_and_one_that_is_not_an_id_is_left_out() {
+        let id = |c: &str| c.repeat(64);
+        let forward = json!({"id": "f", "take": {"commitTxid": "$(reboot)", "txid": id("C")},
+            "offer": {"btc": {"value": "2", "txid": id("a")}, "evm": {"amount": "1"}}});
+        let back = json!({"id": "r", "amount": "5", "evmAmount": "6", "lock": {"commitTxid": id("d"), "txid": id("e")}, "refund": {"txid": id("f")}});
+
+        let (f, r) = (swap(&forward).expect("a swap"), reverse_swap(&back).expect("a swap"));
+
+        assert_eq!(f.linked, [(Role::BridgerLock, id("a")), (Role::Take, id("c"))]);
+        assert_eq!(r.linked, [(Role::LockCommit, id("d")), (Role::Lock, id("e")), (Role::Refund, id("f"))]);
+    }
+
+    #[test]
+    fn a_transaction_is_summed_for_the_address_it_was_listed_for() {
+        let out = |to: &str, value: u64| json!({"scriptpubkey_address": to, "value": value});
+        let tx = json!({"txid": "ab".repeat(32), "fee": 500, "weight": 1718,
+            "status": {"confirmed": true, "block_height": 900_000, "block_time": 1_700_000_000},
+            "vin": [{"prevout": out("bc1qmine", 40_000)}, {"prevout": out("bc1qother", 9)}],
+            "vout": [out("bc1qmine", 546), out("bc1qmine", 30_000), out("bc1qother", 8_963)]});
+
+        let (mine, by_id) = (chain_tx(&tx, Some("bc1qmine")).expect("a transaction"), chain_tx(&tx, None).expect("a transaction"));
+
+        assert_eq!((mine.received, mine.sent, mine.note, mine.vsize, mine.height, mine.time), (30_546, 40_000, true, 430, Some(900_000), Some(1_700_000_000)));
+        assert_eq!((by_id.received, by_id.sent, by_id.note, by_id.rate_milli()), (0, 0, false, Some(1_162)));
+    }
+
+    #[test]
+    fn an_unconfirmed_transaction_has_no_block_whatever_the_answer_carries_and_one_without_a_fee_is_dropped() {
+        let unconfirmed = json!({"txid": "ab".repeat(32), "fee": 1, "weight": 4, "status": {"confirmed": false, "block_height": 5}});
+        let no_fee = json!([{"txid": "cd".repeat(32), "weight": 4}, {"txid": "not an id", "fee": 1, "weight": 4}]);
+
+        let (tx, list) = (chain_tx(&unconfirmed, None).expect("a transaction"), history(&no_fee, "bc1qmine"));
+
+        assert_eq!((tx.height, list), (None, Some(vec![])));
+    }
+
+    #[test]
+    fn the_outlook_needs_the_tip_and_the_hour_estimate() {
+        let fees = json!({"1": 3.521, "6": 1.694});
+
+        let (read, no_tip, no_hour, hostile) =
+            (outlook(&json!(977_529), &fees), outlook(&json!("x"), &fees), outlook(&json!(1), &json!({"1": 2.0})), outlook(&json!(1), &json!({"6": -1.0})));
+
+        assert_eq!((read, no_tip, no_hour, hostile), (Some(Outlook { tip: 977_529, hour_milli: 1_694 }), None, None, None));
     }
 }
