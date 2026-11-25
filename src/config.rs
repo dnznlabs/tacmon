@@ -44,14 +44,16 @@ impl Config {
         Some(base.join("tacmon").join("config.toml"))
     }
 
-    /// An explicit path must exist; the default path is used only when it does.
-    pub fn load(explicit: Option<&Path>) -> Result<Self> {
+    /// An explicit path must exist; the default path is used only when it does. With the configuration comes the
+    /// file it was read from, `None` when there was none to read.
+    pub fn load(explicit: Option<&Path>) -> Result<(Self, Option<PathBuf>)> {
         let path = match explicit {
             Some(p) => Some(p.to_path_buf()),
             None => Self::default_path().filter(|p| p.exists()),
         };
-        let Some(path) = path else { return Ok(Self::default()) };
+        let Some(path) = path else { return Ok((Self::default(), None)) };
         let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+        let cfg = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        Ok((cfg, Some(path)))
     }
 }

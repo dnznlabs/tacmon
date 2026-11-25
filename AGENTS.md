@@ -71,7 +71,8 @@ For anyone changing this repo, human or agent.
 
 - **Ports and adapters, in Rust terms.** A port is a trait in the monitor's `ports.rs`. An adapter is a struct in `adapters/` built by a `create_*` function. Only `adapters/mod.rs` and `main.rs` name concrete adapters; `feed`, `state` and `ui` see ports and the model.
 - **The memory adapter is the contract.** Tests substitute it for the real ones. A new port gets its memory implementation in the same change.
-- **A new monitor** is a directory under `src/monitors/` with the same shape, a section in `Config`, and a line in `create_monitors`. Nothing in `src/shell/` changes.
+- **A new monitor** is a directory under `src/monitors/` with the same shape, a section in `Config`, a line in `create_monitors` and a row in `monitors::KNOWN`. Nothing in `src/shell/` changes.
+- **Every monitor is off by default** (`enabled = false`): each needs something of the operator's to watch, and none reads anything before it is asked to. `--demo` runs them all. With none on, `main.rs` prints `setup_help` (where the configuration goes, the line for each monitor in `KNOWN`) and exits 2.
 - **Wire formats stay in `adapters/wire.rs`.** The provider's log messages and record fields are not a stable interface: read them leniently, and show what is not recognised as it is.
 - **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering. A failed status, or an answer missing what it must carry, is a failed read.
 - **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee.

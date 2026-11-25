@@ -23,7 +23,7 @@ A provider sells in both directions once its reverse side is on (`FB_LP_REVERSE=
 
 ### What it assumes
 
-A provider installed as Tacit's own instructions describe, [Run one that stays on](https://github.com/src-company/tacit/blob/main/fastbridge-lp/README.md#run-one-that-stays-on), and then kept running as a systemd service with its data in `/var/lib`. Tacit's instructions stop at running it from a terminal; [The provider as a service](#the-provider-as-a-service) below is the step from there to what the defaults expect. Set up that way, no configuration is needed.
+A provider installed as Tacit's own instructions describe, [Run one that stays on](https://github.com/src-company/tacit/blob/main/fastbridge-lp/README.md#run-one-that-stays-on), and then kept running as a systemd service with its data in `/var/lib`. Tacit's instructions stop at running it from a terminal; [The provider as a service](#the-provider-as-a-service) below is the step from there to what the defaults expect. Set up that way, the configuration is one line: `enabled = true` under `[fast_bridge]`, without which the monitor is off and reads nothing.
 
 | ASSUMPTION | DEFAULT | SETTING |
 |:---|:---|:---|
@@ -56,7 +56,7 @@ The header is on every page, one line per direction. Forward: TAC free / promise
 
 ## Settings
 
-Optional: `~/.config/tacmon/config.toml`, or `--config FILE`, under `[fast_bridge]`. [`config.example.toml`](../config.example.toml) is every setting at its default. Each of these sends something somewhere, so each is empty until you set it. Two more run a command with the provider's key and are empty by default too: `status_cmd` ([Maintenance](#maintenance)) and `normalize_cmd` ([Silent sends](#silent-sends-to-the-reverse-side)).
+`~/.config/tacmon/config.toml`, or `--config FILE`, under `[fast_bridge]`. [`config.example.toml`](../config.example.toml) is every setting at its default. `fast_bridge.enabled` is the one setting that must be there: it is `false` by default, and `true` turns the monitor on. The rest are optional. Each of these sends something somewhere, so each is empty until you set it. Two more run a command with the provider's key and are empty by default too: `status_cmd` ([Maintenance](#maintenance)) and `normalize_cmd` ([Silent sends](#silent-sends-to-the-reverse-side)).
 
 `fast_bridge.eth_rpc` is empty by default, so the pool account is sent to no RPC and its ETH balance is not shown. Set a URL to show it.
 

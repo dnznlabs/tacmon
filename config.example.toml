@@ -8,7 +8,7 @@ bad = "red"
 dim = "242"
 
 [fast_bridge]
-enabled = true
+enabled = false
 lp_url = "http://127.0.0.1:8787"
 boards = ["https://tacit-fast-board.onrender.com"]
 data_dir = "/var/lib/tacit-fastbridge-lp"

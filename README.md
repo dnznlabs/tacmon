@@ -19,7 +19,9 @@ It is built in two levels: a **monitor** per kind of service, and each monitor's
 
 `tacmon` reads a service's own log, local API and records, so it runs **on the same machine as the service**, as a user allowed to read them. The public board is the only thing it reads from elsewhere, and it shows that from your service's point of view: your ad, your rivals, the bridges you could take.
 
-`tacmon --demo` runs on made-up data and needs none of this. It is the way to look before you run anything.
+Every monitor is **off until you turn it on** in the configuration, because each needs something of yours to watch. Run with none on and `tacmon` says where the configuration goes and which line turns each monitor on ([Configuration](#configuration)).
+
+`tacmon --demo` runs every monitor on made-up data and needs none of this. It is the way to look before you run anything.
 
 ## Release Info
 
@@ -43,7 +45,7 @@ Alpha software. No warranty. What `tacmon` shows is read from a provider's log, 
 
 For one fast bridge liquidity provider, in both directions: a bridger's TAC on Bitcoin for pool TAC (forward), and pool TAC for a TAC note on Bitcoin (reverse). It reads the provider's log, its local API, its swap records and the public board.
 
-It expects a provider set up as Tacit's instructions describe and kept running as a systemd unit named `tacit-fastbridge-lp`, with its API on `127.0.0.1:8787` and its data in `/var/lib/tacit-fastbridge-lp`. Set up that way, no configuration is needed; anything else is a setting.
+Turn it on with `enabled = true` under `[fast_bridge]`. It expects a provider set up as Tacit's instructions describe and kept running as a systemd unit named `tacit-fastbridge-lp`, with its API on `127.0.0.1:8787` and its data in `/var/lib/tacit-fastbridge-lp`. Set up that way, that one line is the whole configuration; anything else is a setting.
 
 | KEY | PAGE | SHOWS |
 |:---|:---|:---|
@@ -64,7 +66,7 @@ The Maintenance page prints the commands that keep the two directions stocked; `
 There are no packaged releases yet. Build it with a Rust toolchain: `make build` leaves the binary at `target/release/tacmon`.
 
 ```bash
-tacmon                        # Watch the services on this machine
+tacmon                        # Watch the services on this machine: the monitors your configuration turns on
 tacmon --demo                 # Made-up data: nothing is read from this machine or the network
 tacmon --snapshot demand      # One page as plain text, for scripts and bug reports (pages by tab name: log, maint, tx; the longer old names still work)
 tacmon --no-splash             # Skip the animated start screen
@@ -73,7 +75,21 @@ tacmon --print-config         # The effective configuration, as TOML
 
 ### Configuration
 
-Optional: `~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.toml`](config.example.toml) is the defaults. `[theme]` belongs to the tool, and each monitor has a section of its own (`[fast_bridge]`).
+`~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.toml`](config.example.toml) is the defaults. `[theme]` belongs to the tool, and each monitor has a section of its own (`[fast_bridge]`).
+
+Every monitor is off by default, so the file needs at least the line that turns one on:
+
+```bash
+mkdir -p ~/.config/tacmon
+tacmon --print-config > ~/.config/tacmon/config.toml    # every setting at its default, the same as config.example.toml
+```
+
+```toml
+[fast_bridge]
+enabled = true
+```
+
+With no monitor on, `tacmon` starts nothing and reads nothing: it prints where the configuration is or goes and the line for each monitor, and exits with status 2. With more than one on, `m` switches between them.
 
 Nothing leaves the machine that you did not configure. The settings that ask an outside service for something (an Ethereum RPC, a Bitcoin explorer) or run a command with the provider's key are empty by default, and [the monitor's guide](docs/fast-bridge.md#settings) says what each one sends.
 

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FastBridgeConfig {
+    /// Off until set: a monitor needs a service of the operator's to watch, and reads nothing before it is asked to.
     pub enabled: bool,
     /// The provider's local HTTP API (`/info`, `/health`).
     pub lp_url: String,
@@ -66,7 +67,7 @@ pub struct Advisor {
 impl Default for FastBridgeConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             lp_url: "http://127.0.0.1:8787".into(),
             boards: vec!["https://tacit-fast-board.onrender.com".into()],
             data_dir: "/var/lib/tacit-fastbridge-lp".into(),
