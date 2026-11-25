@@ -5,7 +5,7 @@
 //! set no shell reads anything into.
 
 use super::{
-    ledger::{Place, TxRow},
+    ledger::{LockWait, Place, TxRow},
     model::{Coin, Direction, Level, ReverseSide, Swap, UNIT, rate, tac},
 };
 use crate::fmt::dur;
@@ -39,6 +39,8 @@ pub struct Facts<'a> {
     pub explorer: bool,
     /// The Transactions page's stuck rows, the going fee rate where it is known, and the time.
     pub stuck: &'a [TxRow],
+    /// Forward swaps whose pool lock the pool's log does not show after a long wait.
+    pub lock_waits: &'a [LockWait],
     pub hour_milli: Option<u64>,
     pub now: u64,
 }
@@ -125,6 +127,19 @@ pub fn upkeep(f: &Facts) -> Upkeep {
             Level::Warn,
             "The reverse side's address is not known. Print it (reads only), then set fast_bridge.reverse_address:",
             vec![format!("{HELPER} status")],
+        ));
+    }
+
+    for w in f.lock_waits {
+        steps.push(step(
+            Level::Warn,
+            format!(
+                "Swap {} has been making its pool lock for {}, and the pool's log on Ethereum does not show it. A relay sends the lock, not your account: \
+                 the Log page has what the relay answered.",
+                crate::fmt::short(&w.swap, 8, 4),
+                dur(w.secs)
+            ),
+            vec![],
         ));
     }
 
@@ -266,6 +281,7 @@ mod tests {
             forward_min: None,
             explorer: true,
             stuck: &[],
+            lock_waits: &[],
             hour_milli: None,
             now: 0,
         }
@@ -420,5 +436,16 @@ mod tests {
             steps[0].text
         );
         assert_eq!(steps[1].cmd, [format!("{HELPER} bump --txid {}", id('b'))]);
+    }
+
+    #[test]
+    fn a_pool_lock_the_log_does_not_show_is_a_step_with_no_command() {
+        let (waits, side) = ([LockWait { swap: "ab".repeat(32), secs: 2_400 }], ReverseSide::Off);
+
+        let up = upkeep(&Facts { lock_waits: &waits, ..facts(&[], &[], &[], &side) });
+
+        let steps: Vec<&Step> = up.steps.iter().filter(|s| s.text.contains("pool lock")).collect();
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].text.contains("for 40m00s") && steps[0].level == Level::Warn && steps[0].cmd.is_empty(), "{}", steps[0].text);
     }
 }

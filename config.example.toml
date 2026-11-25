@@ -24,6 +24,8 @@ log_cmd = [
 ]
 eth_rpc = ""
 pool_account = ""
+pool_contract = ""
+eth_explorer = ""
 btc_explorer = ""
 reverse_address = ""
 status_cmd = []

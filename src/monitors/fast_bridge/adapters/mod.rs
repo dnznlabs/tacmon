@@ -16,6 +16,11 @@ pub fn create_ports(cfg: &FastBridgeConfig) -> Ports {
         board: Arc::new(http::create_http_board(client.clone(), &cfg.boards)),
         swaps: Arc::new(local::create_file_swaps(&cfg.data_dir)),
         gas: (!cfg.eth_rpc.is_empty()).then(|| Arc::new(http::create_rpc_gas(client.clone(), &cfg.eth_rpc)) as _),
+        // both must be set: the RPC to ask, and the contract to ask about
+        pool: (!cfg.eth_rpc.is_empty())
+            .then(|| http::create_rpc_pool_log(client.clone(), &cfg.eth_rpc, &cfg.pool_contract))
+            .flatten()
+            .map(|p| Arc::new(p) as _),
         chain: (!cfg.btc_explorer.is_empty()).then(|| Arc::new(http::create_http_chain(client, &cfg.btc_explorer)) as _),
         inventory: (!cfg.status_cmd.is_empty()).then(|| Arc::new(local::create_command_inventory(&cfg.status_cmd)) as _),
         log: Box::new(local::create_command_log(&cfg.log_cmd)),

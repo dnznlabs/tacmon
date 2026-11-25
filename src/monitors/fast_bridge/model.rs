@@ -152,6 +152,9 @@ pub struct Swap {
     pub take_txid: String,
     /// Every Bitcoin transaction the record names, with what it is to the swap. Each id is 64 hex digits.
     pub linked: Vec<(Role, String)>,
+    /// Forward: the leaf of the provider's lock in the pool, 64 hex digits, as the pool's log names it. Empty until
+    /// the provider has built the lock.
+    pub pool_leaf: String,
 }
 
 /// What a Bitcoin transaction is to a swap, named as the provider's record names it.
@@ -166,6 +169,8 @@ pub enum Role {
     Lock,
     Refund,
     TakeRefund,
+    /// Forward, on Ethereum: the provider's lock of pool TAC for the bridger. A relay sends it, not the pool account.
+    PoolLock,
 }
 
 impl Role {
@@ -178,6 +183,7 @@ impl Role {
             Role::Lock => "lock",
             Role::Refund => "refund",
             Role::TakeRefund => "take refund",
+            Role::PoolLock => "pool lock",
         }
     }
     /// Whether the swap's TAC on Bitcoin rides on this transaction. The others only pay for one that does.
@@ -265,6 +271,28 @@ pub struct Outlook {
 /// "1.16": thousandths of a sat per virtual byte, as sats.
 pub fn rate(milli: u64) -> String {
     format!("{}.{:02}", milli / 1000, (milli % 1000) / 10)
+}
+
+/// A lock put into the pool, as the pool's own log on Ethereum reports it. `leaf` is 64 hex digits and `tx` is
+/// `0x` and 64: the reader drops anything else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolLock {
+    pub leaf: String,
+    pub tx: String,
+    pub block: u64,
+    /// When that block was made, where the node says.
+    pub time: Option<u64>,
+}
+
+/// What has been read of the pool's log so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolScan {
+    /// The newest block, and the oldest one the read reaches back to: a lock made before `since` is not in `locks`.
+    pub tip: u64,
+    pub since: u64,
+    /// Every lock anyone put into the pool in those blocks, oldest first. The log does not say whose a lock is:
+    /// a swap record's leaf does.
+    pub locks: Vec<PoolLock>,
 }
 
 /// The provider's reverse side: pool TAC in, TAC on Bitcoin out, from an address of its own.

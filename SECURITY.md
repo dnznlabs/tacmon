@@ -17,7 +17,7 @@ It watches a service that holds funds. It never holds them itself.
 |---|---|
 | reads the provider's local API, swap records of both directions and log | read, ask for or store a private key |
 | reads the public board over HTTPS | sign or send a transaction |
-| optionally asks one Ethereum RPC for one balance | write to the provider's data directory, or to any file |
+| optionally asks one Ethereum RPC for one balance, and for the pool contract's log of locks | write to the provider's data directory, or to any file |
 | optionally asks one Bitcoin explorer what is unspent and what has happened lately at the provider's two addresses, how its recent swaps' transactions stand, and the going fee rate | call the provider's write endpoints |
 | runs the log command, and the status command where one is set, that the operator configured | run the commands its Maintenance page prints |
 
@@ -65,10 +65,10 @@ These are what the review is told to break. Each names what holds it up.
 | 1 | The binary reads, requests and stores no private key. `scripts/helpers/fast-bridge` reads the provider's, and passes it only to the environment of the tacit tool it runs. | review; there is no code path in the crate that takes one |
 | 2 | Nothing is written to disk and no service is changed: every request is a read. | review |
 | 3 | No `unsafe` in this crate. | `#![forbid(unsafe_code)]`, enforced by the compiler; `make audit-checks` |
-| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. `--demo` makes none. | tests; review |
+| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. The RPC is sent the pool account, for its balance, and where `pool_contract` is set the pool contract's address, one event's topic and a range of blocks: no leaf, swap id or hash of the provider's. `eth_explorer` is never connected to. `--demo` makes none. | tests; review |
 | 5 | The only processes started are `log_cmd` and, where set, `status_cmd`, each with its arguments passed as a list and never through a shell, with no stdin, and a status run's output held to 64 KiB and three minutes. | tests; review |
 | 6 | TLS is rustls with the platform's certificate checks; there is no way to switch verification off. | `deny.toml` bans other TLS stacks; review |
-| 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. The one escape tacmon writes itself is OSC 52, to copy a Maintenance command or a transaction's explorer link: its text is built only from the values claim 11 holds and, for a link, the explorer address in the config, stripped of control characters other than newlines, capped at 8 KiB, and sent base64-encoded. | a test that draws control characters; review |
+| 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. The one escape tacmon writes itself is OSC 52, to copy a Maintenance command or a transaction's explorer link: its text is built only from the values claim 11 holds and, for a link, the explorer address or site in the config, stripped of control characters other than newlines, capped at 8 KiB, and sent base64-encoded. | a test that draws control characters; review |
 | 8 | No input from an untrusted source can panic the process, hang it or grow memory without bound: an answer is refused over 256 KiB (an address's transaction list over 1 MiB), a log line is cut at 64 KiB, a swap record is skipped over 1 MiB and a link is never read as one, readers wait on bounded queues, and amounts that would overflow stop at the largest value. | tests; review; the `panic-surface` report lists every place a panic could start |
 | 9 | A read that fails shows as failed. A stale or missing value is never drawn as a fresh one: a failed status or an answer without terms is a failed read, a figure nothing has reported is a dash and never a zero, and a figure taken from the log says so and gives its age. | tests; review |
 | 10 | Dependencies come from crates.io, carry no known advisory, and use permissive licences. | `cargo-deny` against `deny.toml` |
@@ -111,6 +111,10 @@ The method, its limits and every past review are in [`audits/`](audits/README.md
 - **A false status from the explorer.** The Transactions page believes what the explorer says of a transaction: it
   can call a confirmed one stuck, or a stuck one confirmed. It moves nothing on that word; a bump is the operator's,
   through a tool that reads the chain itself.
+- **A false log from the RPC.** A pool lock's row believes the RPC: it can show a lock that was never made, hide one
+  that was, or give the wrong depth. Only entries from the configured contract, of the lock event and laid out as
+  it is are read, and an answer over 1 MiB is a failed read, but the node's word is not checked against another.
+  The Maintenance line about a missing lock rests on the same word.
 - **Which output of a take holds its TAC.** That takes the key to tell. The page names every note-sized output of a
   take and leaves the choice to `fund`, and counts a take only while all its outputs are unspent.
 - Bugs in dependencies that no advisory describes yet.

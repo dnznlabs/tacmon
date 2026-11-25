@@ -17,6 +17,12 @@ pub struct FastBridgeConfig {
     pub eth_rpc: String,
     /// The pool account, when it should not be learned from the log.
     pub pool_account: String,
+    /// The pool contract's address. With `eth_rpc` set too, its log is read for the locks this provider's recent
+    /// swaps put into the pool. Empty: not read.
+    pub pool_contract: String,
+    /// The site an Ethereum transaction's page is on (`https://etherscan.io`), for the link the Transactions page
+    /// copies. Nothing is ever requested from it. Empty: the hash is copied bare.
+    pub eth_explorer: String,
     /// An Esplora API (`https://mempool.space/api`) to read the coins and transactions at the provider's Bitcoin
     /// addresses, and the status of its recent swaps' transactions, from. Empty: not read, and neither the addresses
     /// nor the transaction ids are sent anywhere.
@@ -62,6 +68,8 @@ impl Default for FastBridgeConfig {
             log_cmd: ["journalctl", "-u", "tacit-fastbridge-lp", "-o", "cat", "-f", "-n", "2000"].map(String::from).to_vec(),
             eth_rpc: String::new(),
             pool_account: String::new(),
+            pool_contract: String::new(),
+            eth_explorer: String::new(),
             btc_explorer: String::new(),
             reverse_address: String::new(),
             status_cmd: Vec::new(),

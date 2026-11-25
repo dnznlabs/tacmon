@@ -4,8 +4,8 @@
 use crate::{
     fmt::short,
     monitors::fast_bridge::model::{
-        Ad, Asset, Capacity, ChainTx, Coin, DUST, Direction, Health, Identity, Level, LogEntry, Outlook, ReverseSide, ReverseStock, Role, Signal, Swap, Terms,
-        UNIT, Want, tac,
+        Ad, Asset, Capacity, ChainTx, Coin, DUST, Direction, Health, Identity, Level, LogEntry, Outlook, PoolLock, ReverseSide, ReverseStock, Role, Signal,
+        Swap, Terms, UNIT, Want, tac,
     },
 };
 use serde_json::Value;
@@ -54,6 +54,55 @@ pub fn txid_text(id: &str) -> Option<String> {
 
 fn txid(v: &Value, key: &str) -> Option<String> {
     txid_text(v.get(key)?.as_str()?)
+}
+
+/// 32 bytes as an Ethereum node or a swap record writes them: 64 hex digits, with or without `0x`. Lower case, bare.
+pub fn word32(s: &str) -> Option<String> {
+    txid_text(s.strip_prefix("0x").unwrap_or(s))
+}
+
+/// An Ethereum address, lower case, or `None`. It goes into a request body the operator's RPC reads.
+pub fn eth_address(s: &str) -> Option<String> {
+    let hex = s.strip_prefix("0x")?;
+    (hex.len() == 40 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| format!("0x{}", hex.to_ascii_lowercase()))
+}
+
+/// A quantity as an Ethereum node writes one: `0x` and hex digits.
+pub fn quantity(v: &Value) -> Option<u64> {
+    u64::from_str_radix(v.as_str()?.strip_prefix("0x")?, 16).ok()
+}
+
+/// `LockLeavesInserted(uint256 indexed firstLockIndex, bytes32[] lockLeaves)`, the pool's event for locks put into it.
+pub const LOCK_LEAVES_TOPIC: &str = "0x18df91ea83f965ece7a17fbab444175c3b2fd487524b95576215d8113d0b8662";
+
+/// The most leaves read from one log entry. A settle carries a handful.
+const MAX_LEAVES: usize = 256;
+
+/// The locks in an `eth_getLogs` answer: one per leaf of each entry that is the pool's lock event, in the answer's
+/// order. `None` when the answer is not a list. An entry from another contract, of another event, taken back by a
+/// reorganisation, or not laid out as the event is, is left out: the node is not trusted to have filtered.
+pub fn pool_locks(v: &Value, pool: &str) -> Option<Vec<PoolLock>> {
+    let mut out = Vec::new();
+    for log in v.as_array()? {
+        let named = |key: &str| log.get(key).and_then(Value::as_str);
+        let ours = named("address").and_then(eth_address).is_some_and(|a| a == pool);
+        let event = log.get("topics").and_then(|t| t.get(0)).and_then(Value::as_str).is_some_and(|t| t.eq_ignore_ascii_case(LOCK_LEAVES_TOPIC));
+        if !ours || !event || log.get("removed").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let (Some(tx), Some(block), Some(data)) = (named("transactionHash").and_then(word32), log.get("blockNumber").and_then(quantity), named("data")) else {
+            continue;
+        };
+        // one dynamic array: where it starts (32), how many it holds, then the leaves
+        let words: Vec<&str> = data.strip_prefix("0x").unwrap_or(data).as_bytes().chunks(64).filter_map(|w| std::str::from_utf8(w).ok()).collect();
+        let count = words.get(1).and_then(|n| usize::from_str_radix(n, 16).ok());
+        if words.first().and_then(|w| u64::from_str_radix(w, 16).ok()) != Some(32) || count != Some(words.len().saturating_sub(2)) || count > Some(MAX_LEAVES) {
+            continue;
+        }
+        let time = log.get("blockTimestamp").and_then(quantity);
+        out.extend(words[2..].iter().filter_map(|w| word32(w)).map(|leaf| PoolLock { leaf, tx: format!("0x{tx}"), block, time }));
+    }
+    Some(out)
 }
 
 /// The transactions a record names, in the order they happen. One it does not name yet, or names unreadably, is left out.
@@ -106,6 +155,7 @@ pub fn swap(v: &Value) -> Option<Swap> {
             .into_iter()
             .chain(linked(v, &[(Role::TakeCommit, Some("take"), "commitTxid"), (Role::Take, Some("take"), "txid")]))
             .collect(),
+        pool_leaf: v.get("lock").and_then(|l| word32(l.get("lockLeaf")?.as_str()?)).unwrap_or_default(),
     })
 }
 
@@ -132,6 +182,8 @@ pub fn reverse_swap(v: &Value) -> Option<Swap> {
                 (Role::TakeRefund, Some("takeRefund"), "txid"),
             ],
         ),
+        // in reverse the pool lock is the bridger's, and the record does not name its leaf
+        pool_leaf: String::new(),
     })
 }
 
@@ -638,5 +690,41 @@ plain sats        1 confirmed coin, 30000 sats in all
             (outlook(&json!(977_529), &fees), outlook(&json!("x"), &fees), outlook(&json!(1), &json!({"1": 2.0})), outlook(&json!(1), &json!({"6": -1.0})));
 
         assert_eq!((read, no_tip, no_hour, hostile), (Some(Outlook { tip: 977_529, hour_milli: 1_694 }), None, None, None));
+    }
+
+    #[test]
+    fn the_pools_locks_are_read_leaf_by_leaf_and_an_entry_that_is_not_the_pools_lock_event_is_left_out() {
+        let (pool, leaf) = (format!("0x{}", "ab".repeat(20)), |c: &str| c.repeat(64));
+        // one array of two leaves: where it starts, how many, then the leaves
+        let data = format!("0x{:064x}{:064x}{}{}", 32, 2, leaf("1"), leaf("2"));
+        let entry = |address: &str, topic: &str, data: &str, removed: bool| {
+            json!({"address": address, "topics": [topic, leaf("0")], "data": data, "removed": removed,
+                "transactionHash": format!("0x{}", leaf("C")), "blockNumber": "0x10", "blockTimestamp": "0x20"})
+        };
+        let logs = json!([
+            entry(&pool.to_uppercase().replace("0X", "0x"), LOCK_LEAVES_TOPIC, &data, false),
+            entry("0x0000000000000000000000000000000000000001", LOCK_LEAVES_TOPIC, &data, false),
+            entry(&pool, &format!("0x{}", leaf("9")), &data, false),
+            entry(&pool, LOCK_LEAVES_TOPIC, &data, true),
+            entry(&pool, LOCK_LEAVES_TOPIC, &format!("0x{:064x}{:064x}{}", 32, 2, leaf("1")), false),
+        ]);
+
+        let (locks, not_a_list) = (pool_locks(&logs, &pool).expect("a list"), pool_locks(&json!({}), &pool));
+
+        let lock = |l: &str| PoolLock { leaf: leaf(l), tx: format!("0x{}", leaf("c")), block: 16, time: Some(32) };
+        assert_eq!((locks, not_a_list), (vec![lock("1"), lock("2")], None));
+    }
+
+    #[test]
+    fn a_forward_record_names_its_pool_leaf_bare_and_an_address_is_an_address_or_nothing() {
+        let leaf = "AB".repeat(32);
+        let rec = json!({"id": "f", "lock": {"lockLeaf": format!("0x{leaf}")}, "offer": {"btc": {"value": "2"}, "evm": {"amount": "1"}}});
+        let none = json!({"id": "f", "lock": {"lockLeaf": "0x12"}, "offer": {"btc": {"value": "2"}, "evm": {"amount": "1"}}});
+
+        let (named, unnamed) = (swap(&rec).expect("a swap").pool_leaf, swap(&none).expect("a swap").pool_leaf);
+        let addresses = [eth_address(&format!("0x{}", "Ab".repeat(20))), eth_address(&"ab".repeat(20)), eth_address("0x\"}],\"x\":[{\"")];
+
+        assert_eq!((named, unnamed.as_str()), (leaf.to_lowercase(), ""));
+        assert_eq!(addresses, [Some(format!("0x{}", "ab".repeat(20))), None, None]);
     }
 }

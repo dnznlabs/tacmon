@@ -77,7 +77,7 @@ For anyone changing this repo, human or agent.
 - **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee.
 - **The board carries every pair.** An ad or a want is this provider's market only when its asset is the one `/info` names; `State::sift` keeps those and counts the rest.
 - **TAC amounts come from swap records, never from the chain.** An explorer sees sats; a row no swap names shows sats and says a note may ride on it.
-- **What an explorer is asked is bounded and said.** Two addresses, the transactions of `ledger::MAX_SWAPS` swaps, `feed::MAX_LOOKUPS` by id a round, none again once `ledger::SETTLED` deep. A new kind of request is a change to claim 4 in `SECURITY.md`.
+- **What an explorer is asked is bounded and said.** Two addresses, the transactions of `ledger::MAX_SWAPS` swaps, `feed::MAX_LOOKUPS` by id a round, none again once `ledger::SETTLED` deep. The Ethereum RPC is asked for the pool's lock log over at most `ledger::POOL_LOOKBACK` blocks, by contract and topic only: whose a lock is gets decided here, from the swap record's leaf, and never by a filter sent to the node. A new kind of request is a change to claim 4 in `SECURITY.md`.
 - **Amounts from outside never wrap or truncate.** Sum with `model::total`, multiply through `model::fee_on`, narrow with `try_from`.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.

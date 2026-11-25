@@ -40,7 +40,9 @@ pub fn create_fast_bridge(cfg: &FastBridgeConfig, demo: bool) -> FastBridge {
     let ports = if demo { adapters::memory::create_demo_ports(now()) } else { adapters::create_ports(cfg) };
     // a demo shows nothing of the operator's: the pool account in their config would otherwise sit in the header
     let cfg = if demo { FastBridgeConfig { pool_account: String::new(), reverse_address: String::new(), ..cfg.clone() } } else { cfg.clone() };
-    FastBridge { state: State::new(&cfg, ports.gas.is_some(), ports.chain.is_some(), ports.inventory.is_some()), cfg, ports: Some(ports), events: None }
+    let mut state = State::new(&cfg, ports.gas.is_some(), ports.chain.is_some(), ports.inventory.is_some());
+    state.shows_pool = ports.pool.is_some();
+    FastBridge { state, cfg, ports: Some(ports), events: None }
 }
 
 impl Monitor for FastBridge {

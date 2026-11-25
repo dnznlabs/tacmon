@@ -2,8 +2,8 @@
 
 use super::wire;
 use crate::monitors::fast_bridge::{
-    model::{Ad, ChainTx, Coin, Health, Outlook, ReverseSide, Terms, Want},
-    ports::{Board, Chain, Fut, GasBalance, Provider},
+    model::{Ad, ChainTx, Coin, Health, Outlook, PoolLock, ReverseSide, Terms, Want},
+    ports::{Board, Chain, Fut, GasBalance, PoolLog, Provider},
 };
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -158,6 +158,55 @@ impl GasBalance for RpcGas {
             let v = json_body(succeeded(self.http.post(&self.rpc).json(&body).send().await?)?).await?;
             let hex = v.get("result").and_then(Value::as_str).context("the RPC answered without a result")?;
             Ok(u128::from_str_radix(hex.trim_start_matches("0x"), 16)? as f64 / 1e18)
+        })
+    }
+}
+
+/// One JSON-RPC call's result, or `None` when the node answered with an error of its own. Nodes refuse with a 200,
+/// a 400 or a 403, so the body of a failed status is read for one; a redirect's never is.
+async fn rpc_call(http: &reqwest::Client, rpc: &str, method: &str, params: Value, max: usize) -> Result<Option<Value>> {
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
+    let resp = http.post(rpc).json(&body).send().await?;
+    let status = resp.status();
+    if status.is_redirection() {
+        bail!("answered {status}");
+    }
+    let answer = json_within(resp, max).await;
+    if answer.as_ref().is_ok_and(|v| v.get("error").is_some_and(|e| !e.is_null())) {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        bail!("answered {status}");
+    }
+    Ok(Some(answer?.get_mut("result").map(Value::take).filter(|r| !r.is_null()).context("the RPC answered without a result")?))
+}
+
+pub struct RpcPoolLog {
+    http: reqwest::Client,
+    rpc: String,
+    /// Lower case, checked when the adapter was made.
+    pool: String,
+}
+
+/// `None` when `pool` is not an Ethereum address: nothing is asked about a contract that cannot be named.
+pub fn create_rpc_pool_log(http: reqwest::Client, rpc: &str, pool: &str) -> Option<RpcPoolLog> {
+    Some(RpcPoolLog { http, rpc: rpc.to_string(), pool: wire::eth_address(pool)? })
+}
+
+impl PoolLog for RpcPoolLog {
+    fn tip(&self) -> Fut<'_, u64> {
+        Box::pin(async move {
+            let tip = rpc_call(&self.http, &self.rpc, "eth_blockNumber", json!([]), MAX_BODY).await?.context("the RPC refused")?;
+            wire::quantity(&tip).context("not a block number")
+        })
+    }
+    fn locks(&self, from: u64, to: u64) -> Fut<'_, Option<Vec<PoolLock>>> {
+        Box::pin(async move {
+            let filter =
+                json!([{ "address": self.pool, "topics": [wire::LOCK_LEAVES_TOPIC], "fromBlock": format!("{from:#x}"), "toBlock": format!("{to:#x}") }]);
+            // a day of the pool's locks is some 20 KiB: an answer over the bound fails, since part of a log is not the log
+            let Some(logs) = rpc_call(&self.http, &self.rpc, "eth_getLogs", filter, MAX_HISTORY).await? else { return Ok(None) };
+            Ok(Some(wire::pool_locks(&logs, &self.pool).context("the RPC answered without a list")?))
         })
     }
 }
@@ -364,5 +413,37 @@ mod tests {
         let (fits, over) = (keep(&mut body, &[0], MAX_BODY).is_ok(), keep(&mut body, &[0], MAX_BODY).is_err());
 
         assert_eq!((fits, over, body.len()), (true, true, MAX_BODY));
+    }
+
+    #[tokio::test]
+    async fn a_node_that_refuses_is_told_from_one_that_fails_whatever_status_it_refuses_with() {
+        let error = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"range too wide"},"result":[]}"#;
+        let pool = format!("0x{}", "ab".repeat(20));
+        let ask = |head: &'static str, body: &'static str| {
+            let pool = pool.clone();
+            async move { create_rpc_pool_log(create_http_client(), &serve_once(head.into(), body).await, &pool).expect("an adapter").locks(1, 2).await }
+        };
+
+        let (refused, forbidden, down, moved, read) = (
+            ask("200 OK", error).await,
+            ask("403 Forbidden", error).await,
+            ask("502 Bad Gateway", "<html>").await,
+            ask("307 Temporary Redirect\r\nLocation: http://127.0.0.1:9/", error).await,
+            ask("200 OK", r#"{"jsonrpc":"2.0","id":1,"result":[]}"#).await,
+        );
+
+        assert!(matches!((refused, forbidden, read), (Ok(None), Ok(None), Ok(Some(l))) if l.is_empty()));
+        assert!(down.is_err() && moved.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_tip_is_read_and_a_pool_that_is_not_an_address_is_never_asked_about() {
+        let answered = serve_once("200 OK".into(), r#"{"jsonrpc":"2.0","id":1,"result":"0x2a"}"#).await;
+        let pool = format!("0x{}", "ab".repeat(20));
+
+        let tip = create_rpc_pool_log(create_http_client(), &answered, &pool).expect("an adapter").tip().await;
+        let unnamed = create_rpc_pool_log(create_http_client(), &answered, "the pool");
+
+        assert_eq!((tip.ok(), unnamed.is_none()), (Some(42), true));
     }
 }
