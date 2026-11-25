@@ -95,7 +95,7 @@ For anyone changing this repo, human or agent.
 
 ### Documentation
 
-A change is not done until the documents describing what it changed are updated in the same change: `README.md`, this file, `SECURITY.md`, `config.example.toml`. A change that touches none of them can say so.
+A change is not done until the documents describing what it changed are updated in the same change: `README.md`, `docs/fast-bridge.md`, this file, `SECURITY.md`, `config.example.toml`. The README is the short version: what a monitor's page, setting or command does in detail goes in the monitor's guide under `docs/`. A change that touches none of them can say so.
 
 ## Commits
 
