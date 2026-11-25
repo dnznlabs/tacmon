@@ -32,6 +32,11 @@ pub struct FastBridgeConfig {
     /// A command that prints what is at the reverse address, read with the provider's key:
     /// `["/path/to/tacmon/scripts/helpers/fast-bridge", "status"]`. Empty: not run. tacmon reads its output, never the key.
     pub status_cmd: Vec<String>,
+    /// A command that says, with the provider's key, whether a transaction paid the reverse key silently:
+    /// `["/path/to/tacmon/scripts/helpers/fast-bridge", "normalize"]`. tacmon adds `--txid <id>` and nothing else, so
+    /// it is the tool's dry run and sends nothing. Run once for each note that left the main address for an address
+    /// that is neither of the provider's. Empty: not run, and such a send is never flagged.
+    pub normalize_cmd: Vec<String>,
     pub refresh: Refresh,
     pub advisor: Advisor,
 }
@@ -73,6 +78,7 @@ impl Default for FastBridgeConfig {
             btc_explorer: String::new(),
             reverse_address: String::new(),
             status_cmd: Vec::new(),
+            normalize_cmd: Vec::new(),
             refresh: Refresh::default(),
             advisor: Advisor::default(),
         }

@@ -5,7 +5,7 @@ use crate::monitors::fast_bridge::{
         Ad, Capacity, ChainTx, Coin, DUST, Direction, Health, Identity, Level, LogEntry, Outlook, PoolLock, ReverseSide, ReverseStock, Role, Signal, Swap,
         Terms, UNIT, Want,
     },
-    ports::{Board, Chain, Fut, GasBalance, Inventory, LogFeed, PoolLog, Ports, Provider, QUEUE, SwapStore},
+    ports::{Board, Chain, Fut, GasBalance, Inventory, LogFeed, PoolLog, Ports, Provider, QUEUE, SilentCheck, SwapStore},
 };
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, channel};
@@ -26,9 +26,19 @@ pub struct Memory {
     pub txs: Vec<(String, Vec<ChainTx>)>,
     pub lookups: Vec<ChainTx>,
     pub outlook: Outlook,
+    /// The outputs that have been spent. One not listed is unspent.
+    pub spent: Vec<(String, u32)>,
+    /// The transactions that paid the reverse key silently, and how much TAC each.
+    pub silent: Vec<(String, u128)>,
     /// The pool's newest block, and every lock in its log.
     pub eth_tip: u64,
     pub pool_locks: Vec<PoolLock>,
+}
+
+impl SilentCheck for Memory {
+    fn waiting<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<u128>> {
+        Box::pin(async move { Ok(self.silent.iter().find(|(id, _)| id == txid).map(|(_, tac)| *tac)) })
+    }
 }
 
 impl PoolLog for Memory {
@@ -67,6 +77,9 @@ impl Chain for Memory {
     }
     fn tx<'a>(&'a self, txid: &'a str) -> Fut<'a, Option<ChainTx>> {
         Box::pin(async move { Ok(self.lookups.iter().find(|t| t.txid == txid).cloned()) })
+    }
+    fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool> {
+        Box::pin(async move { Ok(self.spent.iter().any(|(id, n)| id == txid && *n == vout)) })
     }
     fn outlook(&self) -> Fut<'_, Outlook> {
         Box::pin(async move { Ok(self.outlook) })
@@ -121,7 +134,8 @@ pub fn create_memory_ports(data: Memory, log: Vec<LogEntry>) -> Ports {
         gas: Some(m.clone()),
         chain: Some(m.clone()),
         pool: Some(m.clone()),
-        inventory: Some(m),
+        inventory: Some(m.clone()),
+        silent: Some(m),
         log: Box::new(MemoryLog(log)),
     }
 }
@@ -181,6 +195,7 @@ pub fn create_demo_ports(now: u64) -> Ports {
         received,
         sent,
         note: received > 0 && received % DUST == 0,
+        notes_away: Vec::new(),
     };
     let ad = |name: &str, key: &str, bps: u64, max: u128, avail: u128, any_tac: bool, reverse_terms: Option<Terms>| Ad {
         name: name.into(),
@@ -262,6 +277,8 @@ pub fn create_demo_ports(now: u64) -> Ports {
             mined(format!("{}f1e2d3c4", "8".repeat(56)), 15_060, 1_200, 141, (0, 0)),
         ],
         outlook: Outlook { tip: TIP, hour_milli: 4_200 },
+        spent: Vec::new(),
+        silent: Vec::new(),
         eth_tip: ETH_TIP,
         // oldest first, as a node lists them; the swap still locking has none yet
         pool_locks: vec![pool_lock("0a1b2c3d", 21_000), pool_lock("c9d0e1f2", 9_000), pool_lock("a1b2c3d4", 1_300)],

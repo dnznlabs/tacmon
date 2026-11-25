@@ -19,7 +19,7 @@ It watches a service that holds funds. It never holds them itself.
 | reads the public board over HTTPS | sign or send a transaction |
 | optionally asks one Ethereum RPC for one balance, and for the pool contract's log of locks | write to the provider's data directory, or to any file |
 | optionally asks one Bitcoin explorer what is unspent and what has happened lately at the provider's two addresses, how its recent swaps' transactions stand, and the going fee rate | call the provider's write endpoints |
-| runs the log command, and the status command where one is set, that the operator configured | run the commands its Maintenance page prints |
+| runs the log command, and the status and normalize commands where they are set, that the operator configured; the normalize command only with `--txid <id>` added, which is its dry run | run a command with `--send`, or any command the operator did not configure |
 
 `scripts/helpers/fast-bridge` is the exception to the left-hand column, kept outside the binary. It is a shell script the
 operator runs by hand. It reads `FB_LP_KEY` from the provider's environment file and gives it to tacit's own upkeep tools
@@ -29,6 +29,13 @@ sends is a dry run until it is run again with the token that dry run printed.
 `status_cmd`, empty by default, is the one way tacmon gets what only the key can read: the TAC at the reverse address.
 tacmon starts the helper's read-only `status` as a child process and reads what it prints. The key is read and used in
 that child, never in tacmon's own process: tacmon does not open the environment file, and does not pass the key on.
+
+`normalize_cmd`, empty by default too, is the other: whether a note that left the main address paid the reverse key
+silently. tacmon starts the helper's `normalize` with `--txid <id>` added, the id held to 64 hex digits, and never
+`--send` or `--confirm`: without those the tool reads and sends nothing. The id comes from the explorer's list of the
+main address, and only for a transaction that spends a note-sized coin of that address, which takes the provider's
+key to make: nobody else can have tacmon start the tool. It runs once for each such transaction, and again only for
+one it gave no answer for, ten minutes later.
 
 ## Threat model
 
@@ -65,8 +72,8 @@ These are what the review is told to break. Each names what holds it up.
 | 1 | The binary reads, requests and stores no private key. `scripts/helpers/fast-bridge` reads the provider's, and passes it only to the environment of the tacit tool it runs. | review; there is no code path in the crate that takes one |
 | 2 | Nothing is written to disk and no service is changed: every request is a read. | review |
 | 3 | No `unsafe` in this crate. | `#![forbid(unsafe_code)]`, enforced by the compiler; `make audit-checks` |
-| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. The RPC is sent the pool account, for its balance, and where `pool_contract` is set the pool contract's address, one event's topic and a range of blocks: no leaf, swap id or hash of the provider's. `eth_explorer` is never connected to. `--demo` makes none. | tests; review |
-| 5 | The only processes started are `log_cmd` and, where set, `status_cmd`, each with its arguments passed as a list and never through a shell, with no stdin, and a status run's output held to 64 KiB and three minutes. | tests; review |
+| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, with the ids of transactions it listed at the main address itself when asked whether an output of one is spent, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. The RPC is sent the pool account, for its balance, and where `pool_contract` is set the pool contract's address, one event's topic and a range of blocks: no leaf, swap id or hash of the provider's. `eth_explorer` is never connected to. `--demo` makes none. | tests; review |
+| 5 | The only processes started are `log_cmd` and, where set, `status_cmd` and `normalize_cmd`, each with its arguments passed as a list and never through a shell, with no stdin, a status run's output held to 64 KiB and three minutes and a normalize run's to 64 KiB and ten. To `normalize_cmd` tacmon adds `--txid` and 64 hex digits, and nothing else. | tests; review |
 | 6 | TLS is rustls with the platform's certificate checks; there is no way to switch verification off. | `deny.toml` bans other TLS stacks; review |
 | 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. The one escape tacmon writes itself is OSC 52, to copy a Maintenance command or a transaction's explorer link: its text is built only from the values claim 11 holds and, for a link, the explorer address or site in the config, stripped of control characters other than newlines, capped at 8 KiB, and sent base64-encoded. | a test that draws control characters; review |
 | 8 | No input from an untrusted source can panic the process, hang it or grow memory without bound: an answer is refused over 256 KiB (an address's transaction list over 1 MiB), a log line is cut at 64 KiB, a swap record is skipped over 1 MiB and a link is never read as one, readers wait on bounded queues, and amounts that would overflow stop at the largest value. | tests; review; the `panic-surface` report lists every place a panic could start |
@@ -115,6 +122,10 @@ The method, its limits and every past review are in [`audits/`](audits/README.md
   that was, or give the wrong depth. Only entries from the configured contract, of the lock event and laid out as
   it is are read, and an answer over 1 MiB is a failed read, but the node's word is not checked against another.
   The Maintenance line about a missing lock rests on the same word.
+- **What the normalize tool says, read by its words.** A silent send is flagged from three sentences tacit's tool
+  prints, which are not a stable interface. If one is reworded, the tool's answer reads as no answer and the
+  Maintenance page says so; it is not read as "nothing to move". A verdict of "none of it is this key's" is kept for
+  the run, so the tool is only asked about a transaction two blocks deep.
 - **Which output of a take holds its TAC.** That takes the key to tell. The page names every note-sized output of a
   take and leaves the choice to `fund`, and counts a take only while all its outputs are unspent.
 - Bugs in dependencies that no advisory describes yet.

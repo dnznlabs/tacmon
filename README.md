@@ -110,6 +110,14 @@ With `pool_contract` set, a forward swap's **pool lock** is a row too: the Ether
 - A lock that failed leaves nothing in the log. A forward swap that tacmon has seen `locking` for longer than `tx_stuck_secs`, with no lock in a log read back to before the swap began, is a line on the Maintenance page.
 - Reverse swaps have no Ethereum row: there the pool lock is the bridger's, and the record does not carry its leaf.
 
+### Silent sends to the reverse side
+
+TAC sent to the reverse side silently (to its `tcs1` address, or by a wallet that sends that way) lands at a one-time address of the reverse key, which the reverse side does not count until `normalize` moves it. Only the key can tell such a send from a note you sent to someone else: on the chain both are a transaction at your main address that spends a note and pays a note-sized output to an address that is neither of yours. So tacmon flags nothing by that shape alone.
+
+With `fast_bridge.normalize_cmd` set (`["/path/to/tacmon/scripts/helpers/fast-bridge", "normalize"]`), tacmon runs that command once for each such transaction that is two blocks deep and whose output is still unspent, adding `--txid <id>` and nothing else: the tool's dry run, which sends nothing. Where the tool finds TAC for the reverse key, the Maintenance page says how much and prints the `normalize` command; where it finds none, the transaction is never mentioned. The line goes once the note has moved. A command that gives no answer (a wrong path, a refused `sudo`, an explorer that is down) is a line on the Maintenance page too, and is tried again every ten minutes.
+
+Without `normalize_cmd` nothing is run and no such send is flagged. A silent send from a wallet other than your main address leaves nothing at your addresses for tacmon to start from.
+
 The copied link is `btc_explorer` with a trailing `/api` removed, then `/tx/<id>`: right for mempool.space and blockstream.info. An Esplora served at the root of its host has no such page, and the link opens its JSON. A pool lock's link is `eth_explorer`, then `/tx/<hash>`.
 
 The rest of the Ethereum side is not shown: the provider records no Ethereum transaction hashes, and the pool's log names nothing but a lock's leaf.
