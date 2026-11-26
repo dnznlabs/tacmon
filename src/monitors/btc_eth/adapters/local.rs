@@ -3,10 +3,10 @@
 use super::wire;
 use crate::monitors::{
     btc_eth::{
-        model::{Level, LogEntry, Swap},
+        model::{Level, LogEntry, Quotes, Swap},
         ports::{Fut, LogFeed, SwapStore},
     },
-    common::local::{follow, json_records, not_found},
+    common::local::{follow, json_records, newest_record, not_found},
 };
 use std::path::PathBuf;
 use tokio::sync::mpsc::Receiver;
@@ -34,7 +34,25 @@ pub fn create_file_swaps(data_dir: &std::path::Path) -> FileSwaps {
 }
 
 impl SwapStore for FileSwaps {
-    /// Both directions. Only these two directories are opened: the provider's key file sits beside them in a
+    /// Both directions' quotes, by the names and times of the files in `quotes/` and `reverse/quotes/`: none of them
+    /// is opened. A directory that is not there has had no quote.
+    fn quotes(&self) -> Fut<'_, Quotes> {
+        Box::pin(async move {
+            let mut all = Quotes::default();
+            for dir in ["quotes", "reverse/quotes"] {
+                match newest_record(&self.dir.join(dir)).await {
+                    Ok((count, last)) => all = Quotes { count: all.count.saturating_add(count), last: all.last.max(last) },
+                    Err(e) if not_found(&e) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            if all.count == 0 && tokio::fs::metadata(&self.dir).await.is_err() {
+                anyhow::bail!("the data directory cannot be read");
+            }
+            Ok(all)
+        })
+    }
+    /// Both directions. Only these two directories are read: the provider's key file sits beside them in a
     /// provider that `setup` made, and is never read. Either directory is only there once its side has had a swap:
     /// its absence is no records, any other failure to read it a failed read.
     fn swaps(&self) -> Fut<'_, Vec<Swap>> {
@@ -73,6 +91,15 @@ mod tests {
             .expect("a record");
         std::fs::write(dir.join("reverse/swaps/r.json"), r#"{"id":"rv","phase":"built","amount":"100000","evmAmount":"3120000"}"#).expect("a record");
 
+        // a quote's file is counted and timed, never opened: what is in it does not matter
+        let none_yet = create_file_swaps(&dir).quotes().await.expect("a read");
+        std::fs::create_dir_all(dir.join("quotes")).expect("a directory");
+        for name in ["a.json", "b.json", "b.json.bak"] {
+            std::fs::write(dir.join("quotes").join(name), "not json").expect("a file");
+        }
+        let quotes = create_file_swaps(&dir).quotes().await.expect("a read");
+        let no_quotes = create_file_swaps(&dir.join("not-there")).quotes().await;
+
         let mut read = create_file_swaps(&dir).swaps().await.expect("a read");
         let missing = create_file_swaps(&dir.join("not-there")).swaps().await;
 
@@ -83,6 +110,8 @@ mod tests {
             read.iter().map(|s| (s.id.as_str(), s.direction, s.sats, s.eth)).collect::<Vec<_>>(),
             [("fw", Direction::Forward, 100_000, 3_100_000), ("rv", Direction::Reverse, 100_000, 3_120_000)]
         );
-        assert!(missing.is_err());
+        assert!(missing.is_err() && no_quotes.is_err());
+        assert_eq!((none_yet, quotes.count), (Quotes::default(), 2));
+        assert!(quotes.last.is_some_and(|at| at > 1_700_000_000));
     }
 }

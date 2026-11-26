@@ -2,8 +2,8 @@
 
 use crate::monitors::btc_eth::{
     model::{
-        Ad, Books, Buyback, Capacity, ChainTx, Direction, Fee, Health, Identity, Info, Level, LogEntry, Notes, Outlook, ReverseSide, Role, Signal, Stock, Swap,
-        Target, Terms, UNIT,
+        Ad, Books, Buyback, Capacity, ChainTx, Direction, Fee, Health, Identity, Info, Level, LogEntry, Notes, Outlook, Quotes, ReverseSide, Role, Signal,
+        Stock, Swap, Target, Terms, UNIT,
     },
     ports::{Board, Chain, Fut, GasBalance, LogFeed, Ports, Provider, QUEUE, SwapStore},
 };
@@ -18,6 +18,7 @@ pub struct Memory {
     pub reverse: ReverseSide,
     pub ads: Vec<Ad>,
     pub swaps: Vec<Swap>,
+    pub quotes: Quotes,
     pub eth: f64,
     /// The transactions listed at each address, the ones known by id only, and the chain's outlook.
     pub txs: Vec<(String, Vec<ChainTx>)>,
@@ -64,6 +65,9 @@ impl Board for Memory {
 impl SwapStore for Memory {
     fn swaps(&self) -> Fut<'_, Vec<Swap>> {
         Box::pin(async move { Ok(self.swaps.clone()) })
+    }
+    fn quotes(&self) -> Fut<'_, Quotes> {
+        Box::pin(async move { Ok(self.quotes) })
     }
 }
 
@@ -116,6 +120,8 @@ pub fn create_demo_ports(now: u64) -> Ports {
         lock_txid: txid('f', id),
         // the user's lock, and the provider's take of it once it is taking
         linked: [(Role::UserLock, txid('f', id))].into_iter().chain(matches!(phase, "taking" | "done").then(|| (Role::Take, txid('7', id)))).collect(),
+        said: Vec::new(),
+        lock_height: None,
     };
     let reverse = |id: &str, phase: &str, age: u64, sats: u128| Swap {
         direction: Direction::Reverse,
@@ -191,6 +197,7 @@ pub fn create_demo_ports(now: u64) -> Ports {
             reverse("f1e2d3c4", "done", 52_000, 400_000),
             forward("5d6e7f80", "refunded", 80_000, 200_000),
         ],
+        quotes: Quotes { count: 9, last: Some(now - 240) },
         eth: 0.0188,
         txs: vec![
             // takes pay the main address; the reverse side's locks spend from its own, and one of them is paying too little

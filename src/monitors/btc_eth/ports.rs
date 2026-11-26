@@ -1,7 +1,7 @@
 //! What the BTC and ETH monitor needs from the outside, one trait per capability. The feed and the state depend on
 //! these and never on an adapter: a new transport is a new file in `adapters/` and nothing else.
 
-use super::model::{Ad, Health, Info, LogEntry, ReverseSide, Swap};
+use super::model::{Ad, Health, Info, LogEntry, Quotes, ReverseSide, Swap};
 pub use crate::monitors::common::ports::{Chain, Fut, QUEUE};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
@@ -22,6 +22,8 @@ pub trait Board: Send + Sync {
 /// The provider's swap records, both directions.
 pub trait SwapStore: Send + Sync {
     fn swaps(&self) -> Fut<'_, Vec<Swap>>;
+    /// How many quotes it keeps, both directions, and when it gave the newest.
+    fn quotes(&self) -> Fut<'_, Quotes>;
 }
 
 /// The ETH an account holds outside the pool, in ETH: what pays the provider's own gas. Optional: asking sends the

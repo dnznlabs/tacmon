@@ -58,6 +58,30 @@ pub async fn json_records<T>(dir: &Path, parse: fn(&serde_json::Value) -> Option
     Ok(())
 }
 
+/// How many `.json` records a directory holds and when the newest was last written, in seconds since 1970. Names
+/// and times only: no record is opened. A link is not counted: its time is not a record's.
+pub async fn newest_record(dir: &Path) -> anyhow::Result<(usize, Option<u64>)> {
+    let mut rd = tokio::fs::read_dir(dir).await?;
+    let (mut count, mut newest) = (0usize, None);
+    while let Some(e) = rd.next_entry().await? {
+        let p = e.path();
+        if p.extension().is_none_or(|x| x != "json") {
+            continue;
+        }
+        let Ok(meta) = tokio::fs::symlink_metadata(&p).await else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        count += 1;
+        if count > MAX_RECORDS {
+            bail!("more than {MAX_RECORDS} records");
+        }
+        let at = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+        newest = newest.max(at);
+    }
+    Ok((count, newest))
+}
+
 /// Whether a failed read of a directory is only that it is not there.
 pub fn not_found(e: &anyhow::Error) -> bool {
     e.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)

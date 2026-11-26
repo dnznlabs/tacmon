@@ -4,7 +4,8 @@
 pub use crate::monitors::common::wire::{eth_address, health};
 use crate::monitors::{
     btc_eth::model::{
-        Ad, Books, Buyback, Capacity, Direction, Fee, Identity, Info, Level, LogEntry, Notes, ReverseSide, Role, Signal, Stock, Swap, Target, Terms, eth, sats,
+        Ad, Books, Buyback, Capacity, Direction, Fee, Identity, Info, Level, LogEntry, Notes, ReverseSide, Role, Said, Signal, Stock, Swap, Target, Terms, eth,
+        sats,
     },
     common::wire::{asset, btc_address, field, kept, log_detail, log_head, small, text, txid, units},
 };
@@ -102,6 +103,14 @@ pub fn reverse(v: &Value) -> Option<ReverseSide> {
     Some(ReverseSide::On { terms: terms(v)?, open: v.get("open").and_then(units).map(|n| u64::try_from(n).unwrap_or(u64::MAX)), max_open: small(v, "maxOpen") })
 }
 
+/// What a record says of the transaction it keeps under `inside`: its id, and whatever of its fee, size and time
+/// is there to read. A figure that is not a whole number is left out, not read as zero.
+fn said(v: &Value, inside: &str) -> Option<(String, Said)> {
+    let t = v.get(inside)?;
+    let n = |key: &str| t.get(key).and_then(Value::as_u64);
+    Some((txid(t, "txid")?, Said { fee: n("fee"), vsize: n("vsize"), at: n("at"), bumps: n("bumps").unwrap_or(0) }))
+}
+
 /// A record in the provider's `swaps/`: the user's sats for the provider's pool ETH. `None` for a file that is not
 /// a swap (no offer in it), or an offer without both amounts: zeros would understate what is at stake.
 pub fn swap(v: &Value) -> Option<Swap> {
@@ -120,6 +129,8 @@ pub fn swap(v: &Value) -> Option<Swap> {
         lock_txid: lock.clone().unwrap_or_default(),
         // a take the record does not name itself is known by what spent the lock
         linked: lock.map(|id| (Role::UserLock, id)).into_iter().chain(take.map(|id| (Role::Take, id))).collect(),
+        said: said(v, "take").into_iter().collect(),
+        lock_height: v.get("lockHeight").and_then(Value::as_u64),
     })
 }
 
@@ -145,6 +156,8 @@ pub fn reverse_swap(v: &Value) -> Option<Swap> {
         .into_iter()
         .filter_map(|(role, inside, key)| Some((role, txid(v.get(inside)?, key)?)))
         .collect(),
+        said: ["lock", "refund", "takeRefund"].into_iter().filter_map(|inside| said(v, inside)).collect(),
+        lock_height: None,
     })
 }
 
@@ -243,14 +256,19 @@ mod tests {
     fn a_record_names_its_transactions_in_the_order_they_happen_and_one_that_is_not_an_id_is_left_out() {
         let id = |c: &str| c.repeat(64);
         let offer = json!({ "btc": { "value": "100000", "txid": id("a") }, "evm": { "amount": "3100000" } });
-        let taking = json!({ "id": "s1", "phase": "taking", "offer": offer, "take": { "txid": id("b"), "fee": 420 } });
+        let taking = json!({ "id": "s1", "phase": "taking", "offer": offer, "lockHeight": 977_636,
+            "take": { "txid": id("b"), "commitTxid": null, "at": 1_000, "feeRate": 3, "fee": 500, "vsize": 99, "bumps": 1, "tip": 977_636 } });
         // a lock someone else spent is named by what spent it, and a take that is not an id is not a transaction
         let taken = json!({ "id": "s2", "phase": "done", "offer": offer, "take": { "txid": "$(reboot)" }, "takenBy": id("c") });
         let back = json!({ "id": "r1", "phase": "refunded", "amount": "200000", "evmAmount": "6250000",
             "lock": { "commitTxid": id("d"), "txid": id("e") }, "refund": { "txid": id("f") }, "takeRefund": { "txid": "none yet" } });
 
+        // the take as the provider wrote it: 500 sats over 99 virtual bytes, sent at 1,000 and bumped once
+        let told = swap(&taking).map(|s| (s.said, s.lock_height));
         let read = [swap(&taking), swap(&taken), reverse_swap(&back)].map(|s| s.expect("a swap").linked);
 
+        let take = Said { fee: Some(500), vsize: Some(99), at: Some(1_000), bumps: 1 };
+        assert_eq!((told, take.rate_milli()), (Some((vec![(id("b"), take)], Some(977_636))), Some(5_050)));
         assert_eq!(read[0], [(Role::UserLock, id("a")), (Role::Take, id("b"))]);
         assert_eq!(read[1], [(Role::UserLock, id("a")), (Role::Take, id("c"))]);
         assert_eq!(read[2], [(Role::LockCommit, id("d")), (Role::Lock, id("e")), (Role::Refund, id("f"))]);

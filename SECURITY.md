@@ -38,7 +38,7 @@ key to make: nobody else can have tacmon start the tool. It runs once for each s
 one it gave no answer for, ten minutes later.
 
 The `btc-eth` monitor watches a provider whose key Tacit's setup keeps in a file in its data directory
-(`provider.key`). tacmon opens `swaps/` and `reverse/swaps/` under that directory and no other path in it. That
+(`provider.key`). tacmon opens the records in `swaps/` and `reverse/swaps/` under that directory, lists `quotes/` and `reverse/quotes/` for the names and times of their files without opening one, and touches no other path in it. That
 monitor starts no command but its `log_cmd`. Where its own `btc_explorer` is set it asks that explorer for the
 latest transactions at the provider's two addresses, for its recent swaps' transactions by id, and for the going
 fee rate; it does not ask what is unspent, or whether an output is spent.
@@ -75,7 +75,7 @@ These are what the review is told to break. Each names what holds it up.
 
 | # | Claim | Held up by |
 |---|---|---|
-| 1 | The binary reads, requests and stores no private key, and opens no file in a provider's data directory but its swap records. `scripts/helpers/fast-bridge` reads the provider's, and passes it only to the environment of the tacit tool it runs. | review; there is no code path in the crate that takes one |
+| 1 | The binary reads, requests and stores no private key, and opens no file in a provider's data directory but its swap records; of its quotes (`btc-eth`) it reads the files' names and times only. `scripts/helpers/fast-bridge` reads the provider's, and passes it only to the environment of the tacit tool it runs. | review; there is no code path in the crate that takes one |
 | 2 | Nothing is written to disk and no service is changed: every request is a read. | review |
 | 3 | No `unsafe` in this crate. | `#![forbid(unsafe_code)]`, enforced by the compiler; `make audit-checks` |
 | 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer (each monitor's own `btc_explorer`) is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, with, from `fast-bridge` only, the ids of transactions it listed at the main address itself when asked whether an output of one is spent, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. The RPC is sent the pool account, for its balance (by either monitor, each to its own `eth_rpc`, and by `btc-eth` only an account that reads as an address), and where `pool_contract` is set the pool contract's address, one event's topic and a range of blocks: no leaf, swap id or hash of the provider's. `eth_explorer` is never connected to. `--demo` makes none. | tests; review |

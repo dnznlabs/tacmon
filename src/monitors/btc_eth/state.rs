@@ -72,6 +72,8 @@ pub struct State {
     pub log: VecDeque<LogLine>,
     pub swaps: Vec<Swap>,
     pub swaps_ok: bool,
+    /// The quotes the provider keeps, as last counted. `None`: never counted.
+    pub quotes: Option<Quotes>,
     /// The ads for the pair this provider serves. The board carries every pair: the rest are counted in
     /// `other_ads` and never drawn as this market.
     pub ads: Vec<Ad>,
@@ -143,6 +145,7 @@ impl State {
             log: VecDeque::new(),
             swaps: Vec::new(),
             swaps_ok: false,
+            quotes: None,
             ads: Vec::new(),
             other_ads: 0,
             all_ads: Vec::new(),
@@ -223,6 +226,8 @@ impl State {
                 }
             }
             Event::Eth(e) => self.eth = e,
+            // a failed count keeps the last one: the records light already says the directory is not read
+            Event::Quotes(q) => self.quotes = q.or(self.quotes),
             Event::MainTxs(t) => {
                 self.main_txs_ok = t.is_some();
                 if t.is_some() {

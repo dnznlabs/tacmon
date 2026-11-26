@@ -1,7 +1,7 @@
 //! The Bitcoin transactions a provider's swaps and addresses depend on, as rows, and which of them are stuck.
 //! Arithmetic only: no state, no I/O.
 
-use super::model::{ChainTx, Direction, Outlook, Role, Swap};
+use super::model::{ChainTx, Direction, Outlook, Role, Said, Swap};
 pub use crate::monitors::common::chain::{MAX_SWAPS, SETTLED, Status};
 use crate::monitors::common::chain::{Standing, rank, standing};
 use std::collections::{HashMap, HashSet};
@@ -30,6 +30,10 @@ pub struct TxRow {
     /// listed at neither.
     pub sats: Option<i128>,
     pub standing: Standing,
+    /// Times the provider replaced it with one paying more, by the swap record.
+    pub bumps: u64,
+    /// The fee rate and the time are the swap record's, not an explorer's: the time is when the provider sent it.
+    pub by_record: bool,
 }
 
 pub struct Facts<'a> {
@@ -83,6 +87,21 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
     let row = |txid: &str, role: Option<Role>, swap: Option<&Swap>| {
         let at_address = listed.get(txid);
         let tx = at_address.map(|(_, tx)| tx).or_else(|| f.looked.get(txid).and_then(Option::as_ref));
+        let said: Option<Said> = swap.and_then(|s| s.said.iter().find(|(id, _)| id == txid)).map(|(_, said)| *said);
+        // the provider knows when it sent its own transaction: an explorer does not, and this run saw it later still
+        let since = said.and_then(|s| s.at).or_else(|| f.first_seen.get(txid).copied());
+        let mut standing = standing(tx, f.looked.contains_key(txid), f.outlook, since, f.now, f.stuck_secs);
+        // with no word from an explorer, the record's is what there is: never a status, which only the chain has,
+        // but for a user's lock the block the provider saw it in
+        let mut by_record = false;
+        if tx.is_none() && standing.status == Status::Unknown {
+            standing.rate_milli = said.and_then(|s| s.rate_milli());
+            standing.at = said.and_then(|s| s.at);
+            if let (Some(Role::UserLock), Some(h)) = (role, swap.and_then(|s| s.lock_height)) {
+                standing.status = Status::Confirmed(f.outlook.map(|o| o.tip.saturating_sub(h).saturating_add(1)));
+            }
+            by_record = standing.rate_milli.is_some() || standing.at.is_some() || standing.status != Status::Unknown;
+        }
         TxRow {
             txid: txid.to_string(),
             place: at_address.map_or(Place::Elsewhere, |(place, _)| *place),
@@ -90,7 +109,9 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
             swap: swap.map(|s| (s.id.clone(), s.direction)),
             swap_sats: swap.zip(role).filter(|(_, r)| r.carries_sats()).map(|(s, _)| s.sats),
             sats: at_address.map(|(_, tx)| i128::from(tx.received) - i128::from(tx.sent)),
-            standing: standing(tx, f.looked.contains_key(txid), f.outlook, f.first_seen.get(txid).copied(), f.now, f.stuck_secs),
+            standing,
+            bumps: said.map_or(0, |s| s.bumps),
+            by_record,
         }
     };
 
@@ -195,5 +216,29 @@ mod tests {
 
         assert_eq!((kept.len(), kept[0].phase.as_str(), kept[1].created), (MAX_SWAPS, "offered", 59));
         assert_eq!(ids, [id('b'), id('a')]);
+    }
+
+    #[test]
+    fn with_no_explorer_a_row_carries_what_the_record_says_and_with_one_the_providers_send_time_counts_the_wait() {
+        let take = Said { fee: Some(500), vsize: Some(99), at: Some(9_000), bumps: 1 };
+        let swaps = [Swap {
+            said: vec![(id('b'), take)],
+            lock_height: Some(100),
+            ..swap(1, Direction::Forward, "taking", &[(Role::UserLock, 'a'), (Role::Take, 'b')])
+        }];
+        let (looked, seen) = (HashMap::from([(id('b'), Some(tx('b', None, 0, 0)))]), HashMap::from([(id('b'), 9_900)]));
+        let (none, unseen) = (HashMap::new(), HashMap::new());
+        let bare = Facts { main: None, reverse: None, outlook: None, ..facts(&swaps, &[], &[], &none, &unseen) };
+
+        let (alone, asked) = (rows(&bare), rows(&facts(&swaps, &[], &[], &looked, &seen)));
+
+        let read = |rows: &[TxRow], c: char| {
+            rows.iter().find(|r| r.txid == id(c)).map(|r| (r.standing.status, r.standing.rate_milli, r.standing.at, r.by_record, r.bumps)).expect("a row")
+        };
+        // the lock is in a block by the record's word; the take has no status, only what the provider wrote of it
+        assert_eq!(read(&alone, 'a'), (Status::Confirmed(None), None, None, true, 0));
+        assert_eq!(read(&alone, 'b'), (Status::Unknown, Some(5_050), Some(9_000), true, 1));
+        // the explorer has it unconfirmed: its figures, and a wait counted from when the provider sent it, not when this run saw it
+        assert_eq!(read(&asked, 'b'), (Status::Unconfirmed, Some(1_000), Some(9_000), false, 1));
     }
 }

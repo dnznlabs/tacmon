@@ -15,11 +15,12 @@ version is in the [README](../README.md#btc-eth).
 ## What it reads
 
 The provider's log (`journalctl` by default), its local API (`/info`, `/health`, `/reverse/info`), its swap
-records in both directions (`dataDir/swaps/` and `dataDir/reverse/swaps/`), and the public board's ads. Nothing
+records in both directions (`dataDir/swaps/` and `dataDir/reverse/swaps/`), the names and times of its quote
+files (`dataDir/quotes/` and `dataDir/reverse/quotes/`, never their contents), and the public board's ads. Nothing
 else unless a setting below turns it on.
 
-A provider that Tacit's `setup.mjs` made keeps its key in `dataDir/provider.key`. tacmon opens the two record
-directories and nothing else in `dataDir`: that file is never read.
+A provider that Tacit's `setup.mjs` made keeps its key in `dataDir/provider.key`. tacmon opens the swap records,
+lists the quote directories, and touches nothing else in `dataDir`: that file is never read.
 
 It is the same daemon as the TAC provider, with a key and a data directory of its own, so it is watched by a
 monitor of its own. Run both and `m` switches between them.
@@ -68,6 +69,9 @@ The header has a line for each direction, one for swaps and money, the status li
   it sells from as its upkeep last counted them. While the side is off nothing counts them, and none are shown.
 - **swaps**: the sats and ETH of every swap under way, then the provider's own books: fees earned, and the net
   after costs and losses. A loss is written in red, in capitals.
+- **last quote**: how long ago the provider last gave a quote, by the newest file in its quote directories.
+  A provider that is on the board and has given none is one the app cannot reach or does not pick: `none given`,
+  in yellow.
 - **lights**: health, on the board, records read, and price. A transaction of the provider's own that is stuck
   is named beside them, in red. The price light is the log's word: red after the
   provider says it has no price (it then quotes nothing), hollow when the log this run has read does not say.
@@ -92,7 +96,9 @@ starts. A dry run keeps no books.
 
 The **Tx** page lists the Bitcoin transactions of the 50 most recent swaps, open ones first, as the swap records
 name them: a user's lock and the provider's take of it (BTC→ETH), the provider's lock and its ways back
-(ETH→BTC). Without `btc_explorer` that is all it lists, with no status.
+(ETH→BTC). Without `btc_explorer` it shows what the records themselves say: for a transaction the provider sent,
+its fee rate, when it was sent and how often it was bumped (`sent · status unknown`: whether it confirmed is the
+chain's to say), and for a user's lock that the provider saw it in a block.
 
 With an explorer it adds each one's status, fee rate and age, and the other transactions at the provider's main
 and reverse addresses (a top-up, a move between the two). Sats with a sign are what the explorer saw move at the
@@ -101,7 +107,8 @@ spends a script of the swap and not an address of the provider's.
 
 An unconfirmed transaction is **stuck** when it has waited longer than `tx_stuck_secs`, or ten minutes while
 paying under four fifths of the rate that confirms within the hour. An explorer does not say when a transaction
-was broadcast, so the wait is counted from when this run of tacmon first saw it. A user's stuck lock is the
+was broadcast, so the wait is counted from when the provider's record says it sent it, or for a transaction
+the record gives no time for, from when this run of tacmon first saw it. A user's stuck lock is the
 user's to bump: it is marked on the page and not in the header.
 
 ## Settings

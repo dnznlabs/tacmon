@@ -148,6 +148,38 @@ pub struct Swap {
     pub lock_txid: String,
     /// The Bitcoin transactions the record names, in the order they happen.
     pub linked: Vec<(Role, String)>,
+    /// What the record itself says of some of them, by id: the provider's own, which it built and sent.
+    pub said: Vec<(String, Said)>,
+    /// The block the user's lock was seen in, where the record says.
+    pub lock_height: Option<u64>,
+}
+
+/// What a swap record says of a transaction the provider sent. It is the provider's word, and needs no explorer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Said {
+    /// Its fee in sats and its size in virtual bytes.
+    pub fee: Option<u64>,
+    pub vsize: Option<u64>,
+    /// When the provider sent it, or sent its latest replacement.
+    pub at: Option<u64>,
+    /// Times the provider replaced it with one paying more.
+    pub bumps: u64,
+}
+
+impl Said {
+    /// Its fee rate in thousandths of a sat per virtual byte.
+    pub fn rate_milli(&self) -> Option<u64> {
+        let (fee, vsize) = (self.fee?, self.vsize.filter(|v| *v > 0)?);
+        Some(fee.saturating_mul(1000) / vsize)
+    }
+}
+
+/// The quotes the provider has given, by the files it keeps of them: how many, and when the newest was written.
+/// A provider on the board that is never asked, or cannot be reached, gives none.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Quotes {
+    pub count: usize,
+    pub last: Option<u64>,
 }
 
 /// What a Bitcoin transaction is to a swap, named as the provider's record names it.

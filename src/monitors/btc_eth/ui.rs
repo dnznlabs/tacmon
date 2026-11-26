@@ -173,7 +173,7 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
                 label("net "),
                 b.net_eth.map_or_else(dash, |n| Span::styled(eth_signed(n), bold.fg(if n < 0 { th.bad } else { th.accent }))),
                 label(" ETH"),
-                Span::styled(format!("  (its books, {} swaps)", b.swaps), th.dim()),
+                Span::styled(format!("  (its books, {} swap{})", b.swaps, if b.swaps == 1 { "" } else { "s" }), th.dim()),
             ]);
             if b.loss_sats > 0 || b.loss_eth > 0 {
                 money.push(vec![Span::styled(format!("LOST {} sats · {} ETH", sats(b.loss_sats), eth(b.loss_eth)), bold.fg(th.bad))]);
@@ -192,6 +192,12 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
         // unknown, not red, while the board itself is not answering
         vec![light(st.on_board(), th), label(" on board")],
         if st.ad_contested() { vec![bad("an ad that is not yours uses your key")] } else { vec![] },
+        // on the board and never asked is a provider the app cannot reach, or does not pick: said, where the lights are all green
+        match st.quotes {
+            Some(Quotes { last: Some(at), .. }) => vec![label("last quote "), Span::raw(format!("{} ago", dur(st.now.saturating_sub(at))))],
+            Some(_) => vec![label("last quote "), Span::styled("none given", if st.on_board() == Some(true) { Style::new().fg(th.warn) } else { th.dim() })],
+            None => vec![],
+        },
         vec![light(Some(st.swaps_ok), th), label(" records")],
         vec![
             light(st.priced, th),
@@ -584,17 +590,24 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
                 (Status::Unconfirmed, false) => Cell::from("unconfirmed").style(Style::new().fg(th.warn)),
                 (Status::Confirmed(Some(n)), _) if n >= SETTLED => Cell::from(format!("● confirmed · {SETTLED}+")).style(Style::new().fg(th.good)),
                 (Status::Confirmed(Some(n)), _) => Cell::from(format!("● confirmed · {n}")).style(Style::new().fg(th.good)),
+                // the provider saw it in a block, and no explorer says how deep it is now
+                (Status::Confirmed(None), _) if r.by_record => Cell::from("● in a block").style(Style::new().fg(th.good)),
                 (Status::Confirmed(None), _) => Cell::from("● confirmed").style(Style::new().fg(th.good)),
                 (Status::Missing, _) => Cell::from("✕ not found").style(Style::new().fg(th.warn)),
+                // what the provider wrote of its own transaction is that it sent it: whether it confirmed is the chain's to say
+                (Status::Unknown, _) if r.by_record => Cell::from("sent · status unknown").style(th.dim()),
                 (Status::Unknown, _) => Cell::from("?").style(th.dim()),
             };
             let fee = s.rate_milli.map_or_else(|| right("—".into()), |m| right(rate(m)).style(if s.slow { Style::new().fg(th.bad) } else { Style::new() }));
             // an unconfirmed one is timed from when this run first saw it, which is all tacmon can know
             let age = match (s.status, s.at) {
+                // the provider's own word for when it sent it, where the record gives one
+                (Status::Unknown, Some(at)) => format!("sent {}", dur(st.now.saturating_sub(at))),
                 (Status::Unconfirmed, Some(at)) => format!("seen {}", dur(st.now.saturating_sub(at))),
                 (_, Some(at)) => dur(st.now.saturating_sub(at)),
                 _ => "—".into(),
             };
+            let age = if r.bumps > 0 { format!("{age} · bumped {}", r.bumps) } else { age };
             // the picked row is marked by shape as well as colour, so it reads in a snapshot too
             let this = picked == Some(i);
             let id = Cell::from(format!("{}{}", if this { "▶ " } else { "  " }, short(&r.txid, 8, 4)));
@@ -619,7 +632,7 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             if failing { read_note(false, read) } else { "" }
         )
     } else {
-        format!(" Bitcoin transactions · {} from the swap records · set btc_eth.btc_explorer for their status and your addresses' ", rows.len())
+        format!(" Bitcoin transactions · {} by the swap records' word · set btc_eth.btc_explorer for confirmations and your addresses' ", rows.len())
     };
     let widths = [
         Constraint::Length(15),
@@ -808,6 +821,35 @@ mod tests {
         st.apply(Event::Swaps(Some(vec![swap])));
 
         let page = drawn(&st, Page::Transactions);
-        assert!(page.contains("1 from the swap records · set btc_eth.btc_explorer") && page.contains("lock") && page.contains("ETH→BTC"), "{page}");
+        assert!(page.contains("1 by the swap records' word · set btc_eth.btc_explorer") && page.contains("lock") && page.contains("ETH→BTC"), "{page}");
+    }
+
+    #[test]
+    fn without_an_explorer_a_take_shows_what_the_provider_wrote_of_it_and_the_header_says_when_it_last_quoted() {
+        let id = |c: char| c.to_string().repeat(64);
+        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let swap = Swap {
+            id: "aaaa1".into(),
+            phase: "taking".into(),
+            sats: 25_000,
+            linked: vec![(Role::UserLock, id('a')), (Role::Take, id('b'))],
+            said: vec![(id('b'), Said { fee: Some(500), vsize: Some(99), at: Some(940), bumps: 2 })],
+            lock_height: Some(977_636),
+            ..Default::default()
+        };
+        st.tick(1_000);
+        st.apply(Event::Swaps(Some(vec![swap])));
+        let unasked = text(&header_lines(&st, &theme(), 200));
+
+        st.apply(Event::Quotes(Some(Quotes { count: 0, last: None })));
+        let never = text(&header_lines(&st, &theme(), 200));
+        st.apply(Event::Quotes(Some(Quotes { count: 4, last: Some(700) })));
+        st.apply(Event::Quotes(None));
+
+        let (head, page) = (text(&header_lines(&st, &theme(), 200)), drawn(&st, Page::Transactions));
+        let row = |what: &str| page.lines().find(|l| l.contains(what)).unwrap_or_default().to_string();
+        assert!(!unasked.contains("last quote") && never.contains("last quote none given") && head.contains("last quote 5m00s ago"), "{head}");
+        assert!(row("take").contains("sent · status unknown") && row("take").contains("5.05") && row("take").contains("sent 1m00s · bumped 2"), "{page}");
+        assert!(row("user's lock").contains("● in a block"), "{page}");
     }
 }

@@ -4,7 +4,7 @@
 use super::{
     config::Refresh,
     ledger,
-    model::{Ad, ChainTx, Health, Info, LogEntry, Outlook, ReverseSide, Signal, Swap},
+    model::{Ad, ChainTx, Health, Info, LogEntry, Outlook, Quotes, ReverseSide, Signal, Swap},
     ports::{Ports, QUEUE},
 };
 use crate::{
@@ -29,6 +29,7 @@ pub enum Event {
     Reverse(Option<ReverseSide>),
     Ads(Option<Vec<Ad>>),
     Swaps(Option<Vec<Swap>>),
+    Quotes(Option<Quotes>),
     Eth(Option<f64>),
     /// The latest transactions at the main address, and at the reverse one.
     MainTxs(Option<Vec<ChainTx>>),
@@ -117,7 +118,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
                     changed
                 });
             }
-            if !o.send(Event::Swaps(read)).await {
+            if !o.send(Event::Swaps(read)).await || !o.send(Event::Quotes(swaps.quotes().await.ok())).await {
                 return;
             }
             sleep(every).await;
@@ -197,6 +198,7 @@ mod tests {
         let data = Memory {
             info: Info { terms: Terms { min: 1, max: 2, ..Default::default() }, books: None },
             eth: 0.25,
+            quotes: Quotes { count: 3, last: None },
             // "a" is listed at the main address and so not asked about by id; "b" is known by id alone; "c" not at all
             swaps: vec![Swap { linked: vec![(Role::Take, id('a')), (Role::UserLock, id('b')), (Role::Refund, id('c'))], ..Default::default() }],
             txs: vec![(main.into(), vec![tx('a')]), (reverse.into(), vec![tx('r')])],
@@ -214,7 +216,7 @@ mod tests {
 
         let mut rx = start(create_memory_ports(data, vec![started, reverse_on]), &Refresh::default(), String::new(), wake);
 
-        const FAILED: usize = 11;
+        const FAILED: usize = 12;
         let mut seen = [false; FAILED];
         while seen.iter().any(|s| !s) {
             let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("an event in time").expect("the feed");
@@ -226,6 +228,7 @@ mod tests {
                 Event::Ads(a) => a.map_or(FAILED, |_| 4),
                 Event::Swaps(s) => s.map_or(FAILED, |s| if s.len() == 1 { 5 } else { FAILED }),
                 Event::Eth(e) => e.map_or(FAILED, |e| if e == 0.25 { 6 } else { FAILED }),
+                Event::Quotes(q) => q.map_or(FAILED, |q| if q.count == 3 { 11 } else { FAILED }),
                 Event::MainTxs(t) => t.map_or(FAILED, |t| if t == [tx('a')] { 7 } else { FAILED }),
                 Event::ReverseTxs(t) => t.map_or(FAILED, |t| if t == [tx('r')] { 8 } else { FAILED }),
                 Event::Outlook(o) => o.map_or(FAILED, |o| if o.tip == 9 { 9 } else { FAILED }),
