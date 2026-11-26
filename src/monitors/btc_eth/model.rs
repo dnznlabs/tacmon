@@ -1,7 +1,7 @@
 //! What a provider of Bitcoin for ETH is, as this monitor sees it. No I/O and no wire formats here.
 //! Two units, and a name always says which: sats on Bitcoin, and pool ETH in units of 1e-8 ETH.
 
-pub use crate::monitors::common::model::{Asset, ChainTx, Health, Level, Outlook, effective_bps, rate, total};
+pub use crate::monitors::common::model::{Asset, ChainTx, Health, Level, Outlook, PoolLock, PoolScan, effective_bps, fee_on, rate, total};
 
 /// Sats in a bitcoin, and pool units in an ETH: the pool counts ETH to 8 places.
 pub const UNIT: u128 = 100_000_000;
@@ -152,6 +152,8 @@ pub struct Swap {
     pub said: Vec<(String, Said)>,
     /// The block the user's lock was seen in, where the record says.
     pub lock_height: Option<u64>,
+    /// BTC→ETH: the leaf of the provider's lock of ETH in the pool, as 64 hex digits. Empty until the record names it.
+    pub pool_leaf: String,
 }
 
 /// What a swap record says of a transaction the provider sent. It is the provider's word, and needs no explorer.
@@ -193,6 +195,8 @@ pub enum Role {
     Lock,
     Refund,
     TakeRefund,
+    /// BTC→ETH, on Ethereum: the provider's lock of pool ETH for the user. A relay sends it, not the pool account.
+    PoolLock,
 }
 
 impl Role {
@@ -204,11 +208,12 @@ impl Role {
             Role::Lock => "lock",
             Role::Refund => "refund",
             Role::TakeRefund => "take refund",
+            Role::PoolLock => "pool lock",
         }
     }
     /// Whether the swap's sats ride on this transaction. A commit only pays for the one that does.
     pub fn carries_sats(self) -> bool {
-        self != Role::LockCommit
+        !matches!(self, Role::LockCommit | Role::PoolLock)
     }
 }
 

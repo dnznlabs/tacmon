@@ -1,7 +1,7 @@
 //! Drawing: the header, and one function per page.
 
 use super::{
-    ledger::{Place, SETTLED, Status},
+    ledger::{POOL_SETTLED, Place, SETTLED, Status},
     model::*,
     state::{Page, REF_ETH, REF_SATS, State},
 };
@@ -192,6 +192,22 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
         // unknown, not red, while the board itself is not answering
         vec![light(st.on_board(), th), label(" on board")],
         if st.ad_contested() { vec![bad("an ad that is not yours uses your key")] } else { vec![] },
+        // the app takes the quote that pays the most, so where the fee stands is whether this provider is picked
+        {
+            let ranks: Vec<String> = st
+                .rank_sizes()
+                .into_iter()
+                .filter_map(|size| {
+                    let (place, of) = st.fee_rank(size)?;
+                    Some(match (place, of) {
+                        (_, 1) => format!("the only one at {}", sats(size)),
+                        (1, of) => format!("cheapest of {of} at {}", sats(size)),
+                        (place, of) => format!("#{place} of {of} at {}", sats(size)),
+                    })
+                })
+                .collect();
+            if ranks.is_empty() || !st.ads_ok { vec![] } else { vec![label("fee "), Span::raw(ranks.join(" · "))] }
+        },
         // on the board and never asked is a provider the app cannot reach, or does not pick: said, where the lights are all green
         match st.quotes {
             Some(Quotes { last: Some(at), .. }) => vec![label("last quote "), Span::raw(format!("{} ago", dur(st.now.saturating_sub(at))))],
@@ -569,6 +585,7 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
                 Place::Reverse => "reverse",
                 Place::Both => "main+reverse",
                 Place::Elsewhere => "—",
+                Place::Pool => "pool · eth",
             };
             // one no swap names is told by which way the sats went
             let what = match (r.role, r.sats) {
@@ -580,15 +597,21 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             let swap = r.swap.as_ref().map_or_else(|| Cell::from("—").style(th.dim()), |(id, way)| Cell::from(format!("{} {}", short(id, 8, 0), way.label())));
             // what an explorer saw move at the provider's addresses, fee and all; else the swap record's word for it
             let amount = match (r.sats, r.swap_sats) {
+                // what the provider locked for the user, by the swap record: the pool hides amounts
+                _ if r.place == Place::Pool => {
+                    st.swaps.iter().find(|s| r.swap.as_ref().is_some_and(|(id, _)| *id == s.id)).map_or_else(|| "—".into(), |s| format!("{} ETH", eth(s.eth)))
+                }
                 (Some(n), _) => format!("{}{} sats", if n < 0 { "−" } else { "+" }, sats(n.unsigned_abs())),
                 (None, Some(s)) => format!("{} sats", sats(s)),
                 (None, None) => "—".into(),
             };
             let s = &r.standing;
+            // each chain's own depth past which a transaction stays
+            let settled = if r.place == Place::Pool { POOL_SETTLED } else { SETTLED };
             let status = match (s.status, s.stuck) {
                 (Status::Unconfirmed, true) => Cell::from("▲ unconfirmed · stuck").style(Style::new().fg(th.bad).add_modifier(Modifier::BOLD)),
                 (Status::Unconfirmed, false) => Cell::from("unconfirmed").style(Style::new().fg(th.warn)),
-                (Status::Confirmed(Some(n)), _) if n >= SETTLED => Cell::from(format!("● confirmed · {SETTLED}+")).style(Style::new().fg(th.good)),
+                (Status::Confirmed(Some(n)), _) if n >= settled => Cell::from(format!("● confirmed · {settled}+")).style(Style::new().fg(th.good)),
                 (Status::Confirmed(Some(n)), _) => Cell::from(format!("● confirmed · {n}")).style(Style::new().fg(th.good)),
                 // the provider saw it in a block, and no explorer says how deep it is now
                 (Status::Confirmed(None), _) if r.by_record => Cell::from("● in a block").style(Style::new().fg(th.good)),
@@ -615,6 +638,20 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             if this { row.style(Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED)) } else { row }
         })
         .collect();
+    let bitcoin = rows.iter().filter(|r| r.place != Place::Pool).count();
+    // the pool's log is read so far back and no further: a lock older than that has no row, and the title says how far
+    let pool = match (&st.pool, st.shows_pool) {
+        (Some(scan), _) => {
+            format!(
+                " · pool locks · {} in {}{}",
+                rows.len() - bitcoin,
+                dur(scan.tip.saturating_sub(scan.since).saturating_mul(12)),
+                read_note(st.pool_ok, true)
+            )
+        }
+        (None, true) => format!(" · pool locks{}", read_note(st.pool_ok, false)),
+        (None, false) => String::new(),
+    };
     // counts and what is not answering first, the going rate last: a narrow terminal cuts the title from the right
     let title = if st.explorer {
         let going = match (st.outlook, st.outlook_ok) {
@@ -626,13 +663,12 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         let read = st.main_txs.is_some() || st.reverse_txs.is_some();
         let failing = !(st.main_txs_ok || st.id.bitcoin_address.is_empty()) || !(st.reverse_txs_ok || st.reverse_address.is_empty()) || !st.lookups_ok;
         format!(
-            " Bitcoin transactions · {} · {waiting} unconfirmed{}{}{going} ",
-            rows.len(),
+            " Bitcoin transactions · {bitcoin} · {waiting} unconfirmed{}{}{pool}{going} ",
             if stuck > 0 { format!(" · {stuck} STUCK") } else { String::new() },
             if failing { read_note(false, read) } else { "" }
         )
     } else {
-        format!(" Bitcoin transactions · {} by the swap records' word · set btc_eth.btc_explorer for confirmations and your addresses' ", rows.len())
+        format!(" Bitcoin transactions · {bitcoin} by the swap records' word{pool} · set btc_eth.btc_explorer for confirmations and your addresses' ")
     };
     let widths = [
         Constraint::Length(15),
@@ -681,7 +717,7 @@ mod tests {
 
     #[test]
     fn a_header_with_nothing_read_shows_dashes_and_never_a_zero() {
-        let st = State::new(&BtcEthConfig::default(), true, false);
+        let st = State::new(&BtcEthConfig::default(), true, false, false);
 
         let out = text(&header_lines(&st, &theme(), 200));
 
@@ -692,7 +728,7 @@ mod tests {
 
     #[test]
     fn a_provider_under_its_minimum_is_said_to_be_full_and_one_without_books_says_so() {
-        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let terms = Terms { min: 50_000, max: 100_000, fee_bps: 30, flat: 1000, available: Some(20_000), ..Default::default() };
 
         st.apply(Event::Info(Some(Box::new(Info { terms, books: None }))));
@@ -704,7 +740,7 @@ mod tests {
 
     #[test]
     fn a_loss_is_named_in_the_header_and_on_the_books() {
-        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let books = Books { swaps: 3, loss_eth: 3_100_000, net_eth: Some(-3_000_000), ..Default::default() };
 
         st.apply(Event::Info(Some(Box::new(Info { terms: Terms::default(), books: Some(books) }))));
@@ -716,7 +752,7 @@ mod tests {
 
     #[test]
     fn a_swap_row_shows_both_sides_what_it_trades_at_and_a_fee_only_once_counted() {
-        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let swap = |id: &str, phase: &str| Swap { id: id.into(), phase: phase.into(), sats: 100_000, eth: 3_100_000, ..Default::default() };
         st.apply(Event::Swaps(Some(vec![swap("aaaa1", "done"), swap("bbbb2", "taking")])));
 
@@ -733,7 +769,7 @@ mod tests {
 
     #[test]
     fn the_market_lists_each_direction_in_its_own_unit() {
-        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let reverse = Terms { min: 1_000_000, max: 100_000_000, fee_bps: 30, flat: 20_000, available: Some(500_000), ..Default::default() };
         let terms = Terms { min: 50_000, max: 500_000, fee_bps: 30, flat: 1_000, available: Some(400_000), ..Default::default() };
         st.apply(Event::Ads(Some(vec![Ad { name: "north".into(), claim_pub: "02aa".into(), terms, reverse: true, reverse_terms: Some(reverse) }])));
@@ -749,7 +785,7 @@ mod tests {
 
     #[test]
     fn a_side_that_is_off_shows_no_sats_to_sell_and_notes_not_counted_are_not_drawn_as_none() {
-        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let books = Books {
             stock: Some(Stock { eth: 6_974_000, sats: Some(0), value_eth: 6_974_000, ..Default::default() }),
             notes: Some(Notes::default()),
@@ -770,7 +806,7 @@ mod tests {
     #[test]
     fn the_transactions_page_says_what_each_is_to_its_swap_and_the_header_names_a_stuck_one_of_the_providers() {
         let id = |c: char| c.to_string().repeat(64);
-        let mut st = State::new(&BtcEthConfig::default(), false, true);
+        let mut st = State::new(&BtcEthConfig::default(), false, true, false);
         let swap = Swap {
             id: "aaaa1".into(),
             phase: "taking".into(),
@@ -808,7 +844,7 @@ mod tests {
 
     #[test]
     fn without_an_explorer_the_transactions_page_lists_what_the_records_name_and_says_how_to_get_more() {
-        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let swap = Swap {
             id: "aaaa1".into(),
             phase: "broadcast".into(),
@@ -827,7 +863,7 @@ mod tests {
     #[test]
     fn without_an_explorer_a_take_shows_what_the_provider_wrote_of_it_and_the_header_says_when_it_last_quoted() {
         let id = |c: char| c.to_string().repeat(64);
-        let mut st = State::new(&BtcEthConfig::default(), false, false);
+        let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let swap = Swap {
             id: "aaaa1".into(),
             phase: "taking".into(),
@@ -851,5 +887,30 @@ mod tests {
         assert!(!unasked.contains("last quote") && never.contains("last quote none given") && head.contains("last quote 5m00s ago"), "{head}");
         assert!(row("take").contains("sent · status unknown") && row("take").contains("5.05") && row("take").contains("sent 1m00s · bumped 2"), "{page}");
         assert!(row("user's lock").contains("● in a block"), "{page}");
+    }
+
+    #[test]
+    fn a_pool_lock_has_a_row_with_the_swaps_eth_and_enter_copies_its_link_on_the_ethereum_site() {
+        let cfg = BtcEthConfig { eth_explorer: "https://eth.example/".into(), ..Default::default() };
+        let mut st = State::new(&cfg, false, false, true);
+        let leaf = "5".repeat(64);
+        let swap = Swap { id: "aaaa1".into(), phase: "offered".into(), sats: 25_000, eth: 878_384, pool_leaf: leaf.clone(), ..Default::default() };
+        st.apply(Event::Swaps(Some(vec![swap])));
+        let unread = drawn(&st, Page::Transactions);
+
+        st.apply(Event::Pool(Some(PoolScan {
+            tip: 110,
+            since: 10,
+            locks: vec![PoolLock { leaf, tx: format!("0x{}", "6".repeat(64)), block: 100, time: None }],
+        })));
+        st.apply(Event::Pool(None));
+        st.on_key(Page::Transactions, ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Enter));
+
+        let page = drawn(&st, Page::Transactions);
+        let row = page.lines().find(|l| l.contains("pool · eth")).unwrap_or_default().to_string();
+        assert!(unread.contains("pool locks · not read yet"), "{unread}");
+        assert!(page.contains("pool locks · 1 in 20m00s · NOT ANSWERING: last known"), "{page}");
+        assert!(row.contains("pool lock") && row.contains("0.00878 ETH") && row.contains("confirmed · 11") && row.contains("BTC→ETH"), "{page}");
+        assert_eq!(st.copy, Some(format!("https://eth.example/tx/0x{}", "6".repeat(64))));
     }
 }

@@ -38,6 +38,7 @@ src/monitors/common/http.rs
 src/monitors/common/local.rs
 src/monitors/common/mod.rs
 src/monitors/common/model.rs
+src/monitors/common/pool.rs
 src/monitors/common/ports.rs
 src/monitors/common/wire.rs
 src/monitors/fast_bridge/adapters/http.rs

@@ -73,7 +73,7 @@ Turn it on with `enabled = true` under `[btc_eth]`. It expects a provider made w
 | `2` | Log | the provider's log as a feed; `w` for warnings only |
 | `3` | Market | every provider of the pair on the board, cheapest first; `d` switches direction |
 | `4` | Books | the provider's own accounting: fees, costs, losses and net, its ETH notes and sats, the target, the lean and buybacks |
-| `5` | Tx | the Bitcoin transactions of its swaps and, with an explorer set, of its addresses: status, fee rate, and which are stuck |
+| `5` | Tx | the Bitcoin transactions of its swaps and, with an explorer set, of its addresses: status, fee rate, and which are stuck; its pool locks on Ethereum where an RPC and the pool contract are set |
 
 **[The BTC-ETH monitor](docs/btc-eth.md)** has the rest: what it assumes, the two units, the header, the settings, and what it does not show yet.
 

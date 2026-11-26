@@ -1,6 +1,6 @@
 //! What every monitor's ports are made of.
 
-use super::model::{ChainTx, Coin, Outlook};
+use super::model::{ChainTx, Coin, Outlook, PoolLock};
 use anyhow::Result;
 use std::{future::Future, pin::Pin};
 
@@ -21,4 +21,14 @@ pub trait Chain: Send + Sync {
     /// Whether an output of a transaction has been spent.
     fn spent<'a>(&'a self, txid: &'a str, vout: u32) -> Fut<'a, bool>;
     fn outlook(&self) -> Fut<'_, Outlook>;
+}
+
+/// The pool contract's log on Ethereum. Optional: asking sends the pool contract's address, which every provider
+/// shares, and nothing of this provider's.
+pub trait PoolLog: Send + Sync {
+    /// The newest block's number.
+    fn tip(&self) -> Fut<'_, u64>;
+    /// Every lock put into the pool in blocks `from` to `to`, both included, oldest first. `None`: the node answered
+    /// and refused, which for a log is nearly always the range. A request that got no answer is an error.
+    fn locks(&self, from: u64, to: u64) -> Fut<'_, Option<Vec<PoolLock>>>;
 }

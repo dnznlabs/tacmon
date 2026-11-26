@@ -18,6 +18,12 @@ pub struct BtcEthConfig {
     /// Ethereum JSON-RPC URL for the pool account's own ETH balance, which pays its gas. Empty: not read, and the
     /// account is sent nowhere.
     pub eth_rpc: String,
+    /// The pool contract's address. With `eth_rpc` set too, its log is read for the locks this provider's recent
+    /// swaps put into the pool. Empty: not read.
+    pub pool_contract: String,
+    /// The site an Ethereum transaction's page is on (`https://etherscan.io`), for the link the Tx page copies.
+    /// Nothing is ever requested from it. Empty: the hash is copied bare.
+    pub eth_explorer: String,
     /// A Bitcoin explorer's API (Esplora: mempool.space/api, blockstream.info/api) for the status of the swaps'
     /// transactions and of the provider's addresses. Empty: not asked, and the Transactions page lists what the swap
     /// records name without a status. Asking sends the provider's addresses and transaction ids to whoever answers.
@@ -51,6 +57,8 @@ impl Default for BtcEthConfig {
             data_dir: "/var/lib/tacit-fastbridge-lp-btc".into(),
             log_cmd: ["journalctl", "-u", "tacit-fastbridge-lp-btc", "-o", "cat", "-f", "-n", "2000"].map(String::from).to_vec(),
             eth_rpc: String::new(),
+            pool_contract: String::new(),
+            eth_explorer: String::new(),
             btc_explorer: String::new(),
             pool_account: String::new(),
             deadline_warn_secs: 3600,

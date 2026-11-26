@@ -1,45 +1,12 @@
 //! The provider's and the board's JSON, read into the model. None of it is a stable interface, so every
 //! reader is lenient: a missing field is zero or empty, and a log line that is not recognised is still shown.
 
-pub use crate::monitors::common::wire::{btc_address, eth_address, health, quantity, txid_text, word32};
+pub use crate::monitors::common::wire::{btc_address, health, txid_text, word32};
 use crate::monitors::{
     common::wire::{asset, field, kept, log_detail, log_head, small, text, txid, units},
-    fast_bridge::model::{Ad, Capacity, Direction, Identity, Level, LogEntry, PoolLock, ReverseSide, ReverseStock, Role, Signal, Swap, Terms, UNIT, Want, tac},
+    fast_bridge::model::{Ad, Capacity, Direction, Identity, Level, LogEntry, ReverseSide, ReverseStock, Role, Signal, Swap, Terms, UNIT, Want, tac},
 };
 use serde_json::Value;
-
-/// `LockLeavesInserted(uint256 indexed firstLockIndex, bytes32[] lockLeaves)`, the pool's event for locks put into it.
-pub const LOCK_LEAVES_TOPIC: &str = "0x18df91ea83f965ece7a17fbab444175c3b2fd487524b95576215d8113d0b8662";
-
-/// The most leaves read from one log entry. A settle carries a handful.
-const MAX_LEAVES: usize = 256;
-
-/// The locks in an `eth_getLogs` answer: one per leaf of each entry that is the pool's lock event, in the answer's
-/// order. `None` when the answer is not a list. An entry from another contract, of another event, taken back by a
-/// reorganisation, or not laid out as the event is, is left out: the node is not trusted to have filtered.
-pub fn pool_locks(v: &Value, pool: &str) -> Option<Vec<PoolLock>> {
-    let mut out = Vec::new();
-    for log in v.as_array()? {
-        let named = |key: &str| log.get(key).and_then(Value::as_str);
-        let ours = named("address").and_then(eth_address).is_some_and(|a| a == pool);
-        let event = log.get("topics").and_then(|t| t.get(0)).and_then(Value::as_str).is_some_and(|t| t.eq_ignore_ascii_case(LOCK_LEAVES_TOPIC));
-        if !ours || !event || log.get("removed").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
-        let (Some(tx), Some(block), Some(data)) = (named("transactionHash").and_then(word32), log.get("blockNumber").and_then(quantity), named("data")) else {
-            continue;
-        };
-        // one dynamic array: where it starts (32), how many it holds, then the leaves
-        let words: Vec<&str> = data.strip_prefix("0x").unwrap_or(data).as_bytes().chunks(64).filter_map(|w| std::str::from_utf8(w).ok()).collect();
-        let count = words.get(1).and_then(|n| usize::from_str_radix(n, 16).ok());
-        if words.first().and_then(|w| u64::from_str_radix(w, 16).ok()) != Some(32) || count != Some(words.len().saturating_sub(2)) || count > Some(MAX_LEAVES) {
-            continue;
-        }
-        let time = log.get("blockTimestamp").and_then(quantity);
-        out.extend(words[2..].iter().filter_map(|w| word32(w)).map(|leaf| PoolLock { leaf, tx: format!("0x{tx}"), block, time }));
-    }
-    Some(out)
-}
 
 /// The transactions a record names, in the order they happen. One it does not name yet, or names unreadably, is left out.
 fn linked(v: &Value, named: &[(Role, Option<&str>, &str)]) -> Vec<(Role, String)> {
@@ -203,7 +170,7 @@ pub fn log_line(raw: &str) -> Option<LogEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::monitors::common::wire::MAX_KEPT;
+    use crate::monitors::common::wire::{MAX_KEPT, eth_address};
     use serde_json::json;
 
     #[test]
@@ -463,29 +430,6 @@ plain sats        1 confirmed coin, 30000 sats in all
 
         assert_eq!(f.linked, [(Role::BridgerLock, id("a")), (Role::Take, id("c"))]);
         assert_eq!(r.linked, [(Role::LockCommit, id("d")), (Role::Lock, id("e")), (Role::Refund, id("f"))]);
-    }
-
-    #[test]
-    fn the_pools_locks_are_read_leaf_by_leaf_and_an_entry_that_is_not_the_pools_lock_event_is_left_out() {
-        let (pool, leaf) = (format!("0x{}", "ab".repeat(20)), |c: &str| c.repeat(64));
-        // one array of two leaves: where it starts, how many, then the leaves
-        let data = format!("0x{:064x}{:064x}{}{}", 32, 2, leaf("1"), leaf("2"));
-        let entry = |address: &str, topic: &str, data: &str, removed: bool| {
-            json!({"address": address, "topics": [topic, leaf("0")], "data": data, "removed": removed,
-                "transactionHash": format!("0x{}", leaf("C")), "blockNumber": "0x10", "blockTimestamp": "0x20"})
-        };
-        let logs = json!([
-            entry(&pool.to_uppercase().replace("0X", "0x"), LOCK_LEAVES_TOPIC, &data, false),
-            entry("0x0000000000000000000000000000000000000001", LOCK_LEAVES_TOPIC, &data, false),
-            entry(&pool, &format!("0x{}", leaf("9")), &data, false),
-            entry(&pool, LOCK_LEAVES_TOPIC, &data, true),
-            entry(&pool, LOCK_LEAVES_TOPIC, &format!("0x{:064x}{:064x}{}", 32, 2, leaf("1")), false),
-        ]);
-
-        let (locks, not_a_list) = (pool_locks(&logs, &pool).expect("a list"), pool_locks(&json!({}), &pool));
-
-        let lock = |l: &str| PoolLock { leaf: leaf(l), tx: format!("0x{}", leaf("c")), block: 16, time: Some(32) };
-        assert_eq!((locks, not_a_list), (vec![lock("1"), lock("2")], None));
     }
 
     #[test]

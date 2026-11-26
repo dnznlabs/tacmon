@@ -9,8 +9,8 @@ version is in the [README](../README.md#btc-eth).
 | [What it reads](#what-it-reads) | the provider's log, API and records, and what it assumes about them |
 | [Units](#units) | sats one way, pool ETH the other |
 | [Pages](#pages) | the five pages and the header |
-| [Settings](#settings) | the RPC and the explorer, each off until set |
-| [What it does not show yet](#what-it-does-not-show-yet) | pool locks, upkeep commands, demand |
+| [Settings](#settings) | the RPC, the pool contract and the explorer, each off until set |
+| [What it does not show yet](#what-it-does-not-show-yet) | upkeep commands, demand |
 
 ## What it reads
 
@@ -69,6 +69,9 @@ The header has a line for each direction, one for swaps and money, the status li
   it sells from as its upkeep last counted them. While the side is off nothing counts them, and none are shown.
 - **swaps**: the sats and ETH of every swap under way, then the provider's own books: fees earned, and the net
   after costs and losses. A loss is written in red, in capitals.
+- **fee**: where its BTC→ETH fee stands among the board's providers that would take a swap now, at the least
+  and the most it takes itself: `cheapest of 2 at 25,000`. The app takes the quote that pays the most, so this
+  is whether it is picked.
 - **last quote**: how long ago the provider last gave a quote, by the newest file in its quote directories.
   A provider that is on the board and has given none is one the app cannot reach or does not pick: `none given`,
   in yellow.
@@ -105,6 +108,11 @@ and reverse addresses (a top-up, a move between the two). Sats with a sign are w
 provider's addresses, fees included; sats without one are the swap record's word for a transaction that pays or
 spends a script of the swap and not an address of the provider's.
 
+With `eth_rpc` and `pool_contract` both set, a BTC→ETH swap also gets a row for the provider's lock of ETH in
+the pool, on Ethereum: found in the pool contract's log by the leaf the swap record names, with its depth. The
+log is read a day back at most, and the title says how far; the ETH on the row is the swap record's, since the
+pool hides amounts.
+
 An unconfirmed transaction is **stuck** when it has waited longer than `tx_stuck_secs`, or ten minutes while
 paying under four fifths of the rate that confirms within the hour. An explorer does not say when a transaction
 was broadcast, so the wait is counted from when the provider's record says it sent it, or for a transaction
@@ -116,6 +124,8 @@ user's to bump: it is marked on the page and not in the header.
 | SETTING | DEFAULT | WHAT IT TURNS ON, AND WHAT IT SENDS |
 |:---|:---|:---|
 | `eth_rpc` | empty | the pool account's own ETH (`gas ETH` in the header), which pays its gas when the relay does not. Sends the pool account to that RPC, in `eth_getBalance` |
+| `pool_contract` | empty | with `eth_rpc`, the pool lock rows on the Tx page. Sends the pool contract's address, one event's topic and a range of blocks to that RPC, in `eth_getLogs`: nothing of this provider's |
+| `eth_explorer` | empty | the site (`https://etherscan.io`) a pool lock's copied link points at. Nothing is ever requested from it |
 | `btc_explorer` | empty | the status of the swaps' transactions and the provider's addresses on the Tx page. An Esplora API (`https://mempool.space/api`, `https://blockstream.info/api`). Sends the provider's main and reverse addresses and the ids of its recent swaps' transactions to that explorer |
 | `tx_stuck_secs` | `1800` | how long a transaction may wait unconfirmed before it is marked as stuck |
 | `pool_account` | empty | the account to ask about, when it should not be learned from the log's start line |
@@ -124,8 +134,8 @@ user's to bump: it is marked on the page and not in the header.
 
 ## What it does not show yet
 
-- **Pool locks.** The provider's lock of ETH in the pool, on Ethereum, has no row on the Tx page: the pool's
-  log is not read.
+- **A pool lock that never lands.** A lock has a row once the pool's log shows it; a swap whose lock is overdue
+  is not yet called out.
 - **Upkeep commands.** The provider merges its own notes and moves its own coins; where a hand is needed (a
   top-up, a stuck send) this monitor names nothing to run.
 - **Demand.** The board's waiting swaps are not read.

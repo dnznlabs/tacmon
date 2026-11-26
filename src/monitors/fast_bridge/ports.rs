@@ -1,8 +1,8 @@
 //! What the fast bridge monitor needs from the outside, one trait per capability. The feed and the state
 //! depend on these and never on an adapter: a new transport is a new file in `adapters/` and nothing else.
 
-use super::model::{Ad, Health, LogEntry, PoolLock, ReverseSide, ReverseStock, Swap, Terms, Want};
-pub use crate::monitors::common::ports::{Chain, Fut, QUEUE};
+use super::model::{Ad, Health, LogEntry, ReverseSide, ReverseStock, Swap, Terms, Want};
+pub use crate::monitors::common::ports::{Chain, Fut, PoolLog, QUEUE};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 
@@ -28,16 +28,6 @@ pub trait SwapStore: Send + Sync {
 /// The ETH an account holds, in ETH. Optional: asking sends the account to whoever answers.
 pub trait GasBalance: Send + Sync {
     fn eth<'a>(&'a self, account: &'a str) -> Fut<'a, f64>;
-}
-
-/// The pool contract's log on Ethereum. Optional: asking sends the pool contract's address, which every provider
-/// shares, and nothing of this provider's.
-pub trait PoolLog: Send + Sync {
-    /// The newest block's number.
-    fn tip(&self) -> Fut<'_, u64>;
-    /// Every lock put into the pool in blocks `from` to `to`, both included, oldest first. `None`: the node answered
-    /// and refused, which for a log is nearly always the range. A request that got no answer is an error.
-    fn locks(&self, from: u64, to: u64) -> Fut<'_, Option<Vec<PoolLock>>>;
 }
 
 /// What only the provider's key can read. Optional: behind it is a tool that holds the key, never this process.

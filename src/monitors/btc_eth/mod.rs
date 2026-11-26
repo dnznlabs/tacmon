@@ -38,7 +38,7 @@ pub fn create_btc_eth(cfg: &BtcEthConfig, demo: bool) -> BtcEth {
     let ports = if demo { adapters::memory::create_demo_ports(now()) } else { adapters::create_ports(cfg) };
     // a demo shows nothing of the operator's: the pool account in their config would otherwise sit in the header
     let cfg = if demo { BtcEthConfig { pool_account: String::new(), ..cfg.clone() } } else { cfg.clone() };
-    let state = State::new(&cfg, ports.gas.is_some(), ports.chain.is_some());
+    let state = State::new(&cfg, ports.gas.is_some(), ports.chain.is_some(), ports.pool.is_some());
     BtcEth { state, cfg, ports: Some(ports), events: None }
 }
 

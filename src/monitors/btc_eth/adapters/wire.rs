@@ -7,7 +7,7 @@ use crate::monitors::{
         Ad, Books, Buyback, Capacity, Direction, Fee, Identity, Info, Level, LogEntry, Notes, ReverseSide, Role, Said, Signal, Stock, Swap, Target, Terms, eth,
         sats,
     },
-    common::wire::{asset, btc_address, field, kept, log_detail, log_head, small, text, txid, units},
+    common::wire::{asset, btc_address, field, kept, log_detail, log_head, small, text, txid, units, word32},
 };
 use serde_json::Value;
 
@@ -131,6 +131,7 @@ pub fn swap(v: &Value) -> Option<Swap> {
         linked: lock.map(|id| (Role::UserLock, id)).into_iter().chain(take.map(|id| (Role::Take, id))).collect(),
         said: said(v, "take").into_iter().collect(),
         lock_height: v.get("lockHeight").and_then(Value::as_u64),
+        pool_leaf: v.get("lock").and_then(|l| word32(l.get("lockLeaf")?.as_str()?)).unwrap_or_default(),
     })
 }
 
@@ -158,6 +159,8 @@ pub fn reverse_swap(v: &Value) -> Option<Swap> {
         .collect(),
         said: ["lock", "refund", "takeRefund"].into_iter().filter_map(|inside| said(v, inside)).collect(),
         lock_height: None,
+        // in reverse the pool lock is the user's, and the record does not name its leaf
+        pool_leaf: String::new(),
     })
 }
 
@@ -256,7 +259,7 @@ mod tests {
     fn a_record_names_its_transactions_in_the_order_they_happen_and_one_that_is_not_an_id_is_left_out() {
         let id = |c: &str| c.repeat(64);
         let offer = json!({ "btc": { "value": "100000", "txid": id("a") }, "evm": { "amount": "3100000" } });
-        let taking = json!({ "id": "s1", "phase": "taking", "offer": offer, "lockHeight": 977_636,
+        let taking = json!({ "id": "s1", "phase": "taking", "offer": offer, "lockHeight": 977_636, "lock": { "lockLeaf": format!("0x{}", id("C")) },
             "take": { "txid": id("b"), "commitTxid": null, "at": 1_000, "feeRate": 3, "fee": 500, "vsize": 99, "bumps": 1, "tip": 977_636 } });
         // a lock someone else spent is named by what spent it, and a take that is not an id is not a transaction
         let taken = json!({ "id": "s2", "phase": "done", "offer": offer, "take": { "txid": "$(reboot)" }, "takenBy": id("c") });
@@ -265,6 +268,7 @@ mod tests {
 
         // the take as the provider wrote it: 500 sats over 99 virtual bytes, sent at 1,000 and bumped once
         let told = swap(&taking).map(|s| (s.said, s.lock_height));
+        assert_eq!(swap(&taking).map(|s| s.pool_leaf), Some(id("c")));
         let read = [swap(&taking), swap(&taken), reverse_swap(&back)].map(|s| s.expect("a swap").linked);
 
         let take = Said { fee: Some(500), vsize: Some(99), at: Some(1_000), bumps: 1 };

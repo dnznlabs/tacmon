@@ -102,6 +102,28 @@ pub fn rate(milli: u64) -> String {
     format!("{}.{:02}", milli / 1000, (milli % 1000) / 10)
 }
 
+/// A lock put into the pool, as the pool's own log on Ethereum reports it. `leaf` is 64 hex digits and `tx` is
+/// `0x` and 64: the reader drops anything else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolLock {
+    pub leaf: String,
+    pub tx: String,
+    pub block: u64,
+    /// When that block was made, where the node says.
+    pub time: Option<u64>,
+}
+
+/// What has been read of the pool's log so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolScan {
+    /// The newest block, and the oldest one the read reaches back to: a lock made before `since` is not in `locks`.
+    pub tip: u64,
+    pub since: u64,
+    /// Every lock anyone put into the pool in those blocks, oldest first. The log does not say whose a lock is:
+    /// a swap record's leaf does.
+    pub locks: Vec<PoolLock>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

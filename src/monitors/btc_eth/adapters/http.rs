@@ -1,7 +1,7 @@
 //! The provider's API, the board and an Ethereum RPC, over HTTP. The Bitcoin explorer is the shared one.
 
 use super::wire;
-pub use crate::monitors::common::http::{create_http_chain, create_http_client};
+pub use crate::monitors::common::http::{create_http_chain, create_http_client, create_rpc_pool_log};
 use crate::monitors::{
     btc_eth::{
         model::{Ad, Health, Info, ReverseSide},

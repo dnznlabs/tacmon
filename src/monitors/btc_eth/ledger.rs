@@ -1,9 +1,11 @@
 //! The Bitcoin transactions a provider's swaps and addresses depend on, as rows, and which of them are stuck.
 //! Arithmetic only: no state, no I/O.
 
-use super::model::{ChainTx, Direction, Outlook, Role, Said, Swap};
+use super::model::{ChainTx, Direction, Outlook, PoolLock, PoolScan, Role, Said, Swap};
 pub use crate::monitors::common::chain::{MAX_SWAPS, SETTLED, Status};
 use crate::monitors::common::chain::{Standing, rank, standing};
+use crate::monitors::common::pool::BLOCK_SECS;
+pub use crate::monitors::common::pool::POOL_SETTLED;
 use std::collections::{HashMap, HashSet};
 
 /// Which of the provider's addresses a transaction pays or spends from.
@@ -15,6 +17,8 @@ pub enum Place {
     Both,
     /// Listed at neither: known through a swap record only. A user's lock pays a script, not an address of the provider's.
     Elsewhere,
+    /// On Ethereum, in the pool contract.
+    Pool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,8 +50,15 @@ pub struct Facts<'a> {
     pub outlook: Option<Outlook>,
     /// When each unconfirmed transaction was first seen.
     pub first_seen: &'a HashMap<String, u64>,
+    /// The pool's log on Ethereum. `None`: not read.
+    pub pool: Option<&'a PoolScan>,
     pub now: u64,
     pub stuck_secs: u64,
+}
+
+/// The lock a BTC→ETH swap put into the pool, where the log that was read shows it.
+fn pool_lock<'a>(scan: &'a PoolScan, s: &Swap) -> Option<&'a PoolLock> {
+    (!s.pool_leaf.is_empty()).then(|| scan.locks.iter().rev().find(|l| l.leaf == s.pool_leaf)).flatten()
 }
 
 /// The swaps whose transactions are followed: open ones first, then the newest, `MAX_SWAPS` at most.
@@ -125,6 +136,22 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
                 out.push((r.standing.at.unwrap_or(s.created), r));
             }
         }
+        if let Some((scan, lock)) = f.pool.and_then(|scan| Some((scan, pool_lock(scan, s)?))) {
+            let deep = scan.tip.saturating_sub(lock.block);
+            let r = TxRow {
+                txid: lock.tx.clone(),
+                place: Place::Pool,
+                role: Some(Role::PoolLock),
+                swap: Some((s.id.clone(), s.direction)),
+                swap_sats: None,
+                sats: None,
+                standing: Standing { status: Status::Confirmed(Some(deep.saturating_add(1))), rate_milli: None, at: lock.time, slow: false, stuck: false },
+                bumps: 0,
+                by_record: false,
+            };
+            // a node that gives no time for the block: placed by its depth, which is no younger than this
+            out.push((lock.time.unwrap_or_else(|| f.now.saturating_sub(deep.saturating_mul(BLOCK_SECS))), r));
+        }
     }
     for id in order {
         if seen.insert(id) {
@@ -172,6 +199,7 @@ mod tests {
             looked,
             outlook: Some(Outlook { tip: 105, hour_milli: 1_000 }),
             first_seen: seen,
+            pool: None,
             now: 10_000,
             stuck_secs: 1_800,
         }
@@ -240,5 +268,22 @@ mod tests {
         assert_eq!(read(&alone, 'b'), (Status::Unknown, Some(5_050), Some(9_000), true, 1));
         // the explorer has it unconfirmed: its figures, and a wait counted from when the provider sent it, not when this run saw it
         assert_eq!(read(&asked, 'b'), (Status::Unconfirmed, Some(1_000), Some(9_000), false, 1));
+    }
+
+    #[test]
+    fn a_swaps_pool_lock_is_a_row_by_its_leaf_and_a_lock_of_another_leaf_is_nobodys() {
+        let swaps = [Swap { pool_leaf: id('5'), ..swap(1, Direction::Forward, "offered", &[]) }, swap(2, Direction::Forward, "accepted", &[])];
+        let lock = |leaf: char, block| PoolLock { leaf: id(leaf), tx: format!("0x{}", id('6')), block, time: Some(9_000) };
+        let scan = PoolScan { tip: 110, since: 0, locks: vec![lock('5', 100), lock('9', 105)] };
+        let (looked, seen) = (HashMap::new(), HashMap::new());
+
+        let out = rows(&Facts { pool: Some(&scan), ..facts(&swaps, &[], &[], &looked, &seen) });
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            (out[0].place, out[0].role, out[0].standing.status, out[0].standing.at),
+            (Place::Pool, Some(Role::PoolLock), Status::Confirmed(Some(11)), Some(9_000))
+        );
+        assert_eq!(out[0].swap, Some(("swap1".to_string(), Direction::Forward)));
     }
 }

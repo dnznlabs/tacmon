@@ -2,7 +2,7 @@
 //! these and never on an adapter: a new transport is a new file in `adapters/` and nothing else.
 
 use super::model::{Ad, Health, Info, LogEntry, Quotes, ReverseSide, Swap};
-pub use crate::monitors::common::ports::{Chain, Fut, QUEUE};
+pub use crate::monitors::common::ports::{Chain, Fut, PoolLog, QUEUE};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 
@@ -46,5 +46,7 @@ pub struct Ports {
     pub gas: Option<Arc<dyn GasBalance>>,
     /// `None`: no explorer is asked, and nothing of the provider's is sent to one.
     pub chain: Option<Arc<dyn Chain>>,
+    /// `None`: the pool's log on Ethereum is not read.
+    pub pool: Option<Arc<dyn PoolLog>>,
     pub log: Box<dyn LogFeed>,
 }

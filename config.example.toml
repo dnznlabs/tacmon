@@ -69,6 +69,8 @@ log_cmd = [
     "2000",
 ]
 eth_rpc = ""
+pool_contract = ""
+eth_explorer = ""
 btc_explorer = ""
 pool_account = ""
 deadline_warn_secs = 3600

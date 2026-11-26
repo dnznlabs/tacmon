@@ -6,5 +6,6 @@ pub mod feed;
 pub mod http;
 pub mod local;
 pub mod model;
+pub mod pool;
 pub mod ports;
 pub mod wire;

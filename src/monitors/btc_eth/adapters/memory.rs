@@ -2,10 +2,10 @@
 
 use crate::monitors::btc_eth::{
     model::{
-        Ad, Books, Buyback, Capacity, ChainTx, Direction, Fee, Health, Identity, Info, Level, LogEntry, Notes, Outlook, Quotes, ReverseSide, Role, Signal,
-        Stock, Swap, Target, Terms, UNIT,
+        Ad, Books, Buyback, Capacity, ChainTx, Direction, Fee, Health, Identity, Info, Level, LogEntry, Notes, Outlook, PoolLock, Quotes, ReverseSide, Role,
+        Signal, Stock, Swap, Target, Terms, UNIT,
     },
-    ports::{Board, Chain, Fut, GasBalance, LogFeed, Ports, Provider, QUEUE, SwapStore},
+    ports::{Board, Chain, Fut, GasBalance, LogFeed, PoolLog, Ports, Provider, QUEUE, SwapStore},
 };
 use crate::monitors::common::model::Coin;
 use std::sync::Arc;
@@ -24,6 +24,18 @@ pub struct Memory {
     pub txs: Vec<(String, Vec<ChainTx>)>,
     pub lookups: Vec<ChainTx>,
     pub outlook: Outlook,
+    /// Ethereum's newest block, and every lock the pool's log holds.
+    pub eth_tip: u64,
+    pub pool_locks: Vec<PoolLock>,
+}
+
+impl PoolLog for Memory {
+    fn tip(&self) -> Fut<'_, u64> {
+        Box::pin(async move { Ok(self.eth_tip) })
+    }
+    fn locks(&self, from: u64, to: u64) -> Fut<'_, Option<Vec<PoolLock>>> {
+        Box::pin(async move { Ok(Some(self.pool_locks.iter().filter(|l| (from..=to).contains(&l.block)).cloned().collect())) })
+    }
 }
 
 impl Chain for Memory {
@@ -97,7 +109,15 @@ impl LogFeed for MemoryLog {
 
 pub fn create_memory_ports(data: Memory, log: Vec<LogEntry>) -> Ports {
     let m = Arc::new(data);
-    Ports { provider: m.clone(), board: m.clone(), swaps: m.clone(), gas: Some(m.clone()), chain: Some(m), log: Box::new(MemoryLog(log)) }
+    Ports {
+        provider: m.clone(),
+        board: m.clone(),
+        swaps: m.clone(),
+        gas: Some(m.clone()),
+        chain: Some(m.clone()),
+        pool: Some(m),
+        log: Box::new(MemoryLog(log)),
+    }
 }
 
 /// A made-up provider mid-shift, for `--demo`. Every key, address and transaction id is invented.
@@ -122,6 +142,8 @@ pub fn create_demo_ports(now: u64) -> Ports {
         linked: [(Role::UserLock, txid('f', id))].into_iter().chain(matches!(phase, "taking" | "done").then(|| (Role::Take, txid('7', id)))).collect(),
         said: Vec::new(),
         lock_height: None,
+        // the provider's lock of ETH in the pool, once it has made it
+        pool_leaf: if matches!(phase, "offered" | "taking" | "done") { txid('5', id) } else { String::new() },
     };
     let reverse = |id: &str, phase: &str, age: u64, sats: u128| Swap {
         direction: Direction::Reverse,
@@ -129,10 +151,12 @@ pub fn create_demo_ports(now: u64) -> Ports {
         eth: sats * PRICE * 10_000 / 9_970 + 20_000,
         lock_txid: txid('e', id),
         linked: vec![(Role::Lock, txid('e', id))],
+        pool_leaf: String::new(),
         ..forward(id, phase, age, sats)
     };
     let (main, reverse_address) = ("bc1qdemo0000000000000000000000000000000pair", "bc1qdemo000000000000000000000000pairreverse");
     const TIP: u64 = 977_500;
+    const ETH_TIP: u64 = 24_100_000;
     // a transaction `age` seconds old: confirmed in the block of that time, or still waiting
     let seen = |txid: String, age: u64, confirmed: bool, fee: u64, received: u64, sent: u64| ChainTx {
         txid,
@@ -219,6 +243,11 @@ pub fn create_demo_ports(now: u64) -> Ports {
             seen(txid('f', "5d6e7f80"), 79_000, true, 450, 0, 0),
         ],
         outlook: Outlook { tip: TIP, hour_milli: 2_400 },
+        eth_tip: ETH_TIP,
+        // a pool lock lands about a minute after its swap begins
+        pool_locks: [("a1b2c3d4", 1_500u64), ("c9d0e1f2", 9_000), ("0a1b2c3d", 30_000)]
+            .map(|(id, age)| PoolLock { leaf: txid('5', id), tx: format!("0x{}", txid('6', id)), block: ETH_TIP - (age - 60) / 12, time: Some(now - age + 60) })
+            .to_vec(),
     };
     let entry =
         |time: &str, level, msg: &str, detail: &str, signal| LogEntry { time: time.into(), at: None, level, msg: msg.into(), detail: detail.into(), signal };

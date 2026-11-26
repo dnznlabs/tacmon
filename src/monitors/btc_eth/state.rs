@@ -111,6 +111,12 @@ pub struct State {
     /// When this run first saw each unconfirmed transaction: an explorer does not say when one was broadcast.
     first_seen: HashMap<String, u64>,
     tx_stuck_secs: u64,
+    /// Whether the pool's log is read at all, what has been read of it, and whether the last read answered.
+    pub shows_pool: bool,
+    pub pool: Option<PoolScan>,
+    pub pool_ok: bool,
+    /// Where an Ethereum transaction's page is, from `eth_explorer`. Empty: the hash is copied bare.
+    eth_link: String,
 
     pub deadline_warn_secs: u64,
     /// A pool account from the config wins over the one the log names.
@@ -118,7 +124,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(cfg: &BtcEthConfig, shows_eth: bool, explorer: bool) -> Self {
+    pub fn new(cfg: &BtcEthConfig, shows_eth: bool, explorer: bool, shows_pool: bool) -> Self {
         Self {
             now: 0,
             scroll: [0; Page::ALL.len()],
@@ -169,6 +175,10 @@ impl State {
             outlook_ok: false,
             first_seen: HashMap::new(),
             tx_stuck_secs: cfg.tx_stuck_secs,
+            shows_pool,
+            pool: None,
+            pool_ok: false,
+            eth_link: Some(cfg.eth_explorer.trim_end_matches('/')).filter(|b| !b.is_empty()).map(|b| format!("{b}/tx/")).unwrap_or_default(),
             deadline_warn_secs: cfg.deadline_warn_secs,
             pool_account_fixed: !cfg.pool_account.is_empty(),
         }
@@ -251,6 +261,12 @@ impl State {
                 self.looked.extend(found.into_iter().filter(|(id, _)| wanted.contains(id)));
                 self.see_unconfirmed();
             }
+            Event::Pool(p) => {
+                self.pool_ok = p.is_some();
+                if p.is_some() {
+                    self.pool = p;
+                }
+            }
             Event::Outlook(o) => {
                 self.outlook_ok = o.is_some();
                 if o.is_some() {
@@ -287,6 +303,7 @@ impl State {
             looked: &self.looked,
             outlook: self.outlook,
             first_seen: &self.first_seen,
+            pool: self.pool.as_ref(),
             now: self.now,
             stuck_secs: self.tx_stuck_secs,
         })
@@ -319,7 +336,9 @@ impl State {
                 KeyCode::Char('g') | KeyCode::Home => 0,
                 KeyCode::Char('G') | KeyCode::End => last,
                 KeyCode::Char('c') | KeyCode::Enter => {
-                    self.copy = Some(format!("{}{}", self.tx_link, rows[at].txid));
+                    // an Ethereum hash has a site of its own
+                    let site = if rows[at].place == ledger::Place::Pool { &self.eth_link } else { &self.tx_link };
+                    self.copy = Some(format!("{site}{}", rows[at].txid));
                     at
                 }
                 _ => at,
@@ -482,6 +501,21 @@ impl State {
             None => self.my_ads().next().filter(|_| self.my_ads().nth(1).is_none()),
         }
     }
+    /// Where this provider's BTC→ETH fee stands among the ads that would take a swap of `size` sats now: its place,
+    /// cheapest first, and how many there are. A tie is shared. `None` when its own ad is not on the board or
+    /// would not take that size itself.
+    pub fn fee_rank(&self, size: u128) -> Option<(usize, usize)> {
+        let mine = self.my_ad()?;
+        let takes = |t: &Terms| (t.min..=t.max).contains(&size) && t.available.is_none_or(|a| a >= size);
+        let cost = |t: &Terms| fee_on(size, t.fee_bps, t.flat);
+        let rivals: Vec<&Ad> = self.ads.iter().filter(|a| takes(&a.terms)).collect();
+        takes(&mine.terms).then(|| (1 + rivals.iter().filter(|a| cost(&a.terms) < cost(&mine.terms)).count(), rivals.len()))
+    }
+    /// The sizes that rank is shown at: the least and the most this provider takes.
+    pub fn rank_sizes(&self) -> Vec<u128> {
+        let Some(t) = &self.terms else { return Vec::new() };
+        if t.min < t.max { vec![t.min, t.max.min(t.available.unwrap_or(t.max)).max(t.min)] } else { vec![t.min] }
+    }
     /// `None` while it cannot be told: the board's ads were not read, or this provider's key is not known yet.
     pub fn on_board(&self) -> Option<bool> {
         (self.ads_ok && !self.id.claim_pub.is_empty()).then(|| self.my_ad().is_some())
@@ -506,7 +540,7 @@ mod tests {
     use super::*;
 
     fn state() -> State {
-        State::new(&BtcEthConfig::default(), false, false)
+        State::new(&BtcEthConfig::default(), false, false, false)
     }
     fn swap(direction: Direction, phase: &str, created: u64, sats: u128, eth: u128) -> Swap {
         Swap { direction, id: format!("{phase}{created}"), phase: phase.into(), created, sats, eth, ..Default::default() }
@@ -674,7 +708,7 @@ mod tests {
 
     #[test]
     fn an_unconfirmed_transaction_is_timed_from_when_it_was_first_seen_and_a_users_stuck_lock_is_not_the_providers() {
-        let mut st = State::new(&BtcEthConfig::default(), false, true);
+        let mut st = State::new(&BtcEthConfig::default(), false, true, false);
         let swap = Swap { linked: vec![(Role::UserLock, txid('a')), (Role::Take, txid('b'))], ..swap(Direction::Forward, "taking", 1, 100_000, 3_100_000) };
         st.apply(Event::Swaps(Some(vec![swap])));
         st.tick(1_000);
@@ -699,7 +733,7 @@ mod tests {
     #[test]
     fn the_pick_follows_its_transaction_as_rows_reorder_and_enter_copies_its_explorer_link() {
         let cfg = BtcEthConfig { btc_explorer: "https://explorer.example/api/".into(), ..Default::default() };
-        let (mut linked, mut bare) = (State::new(&cfg, false, true), state());
+        let (mut linked, mut bare) = (State::new(&cfg, false, true, false), state());
         let key = |st: &mut State, code| st.on_key(Page::Transactions, KeyEvent::from(code));
         for st in [&mut linked, &mut bare] {
             st.apply(Event::MainTxs(Some(vec![chain_tx('a', Some(9)), chain_tx('b', Some(8))])));
@@ -717,5 +751,27 @@ mod tests {
         assert_eq!((followed, linked.tx_picked(&linked.ledger())), (Some(2), Some(0)));
         assert_eq!(linked.copy, Some(format!("https://explorer.example/tx/{}", txid('b'))));
         assert_eq!(bare.copy, Some(txid('a')));
+    }
+
+    #[test]
+    fn a_fee_is_ranked_among_the_ads_that_take_that_size_now_and_not_at_a_size_it_does_not_take_itself() {
+        let mut st = state();
+        let pair = (Some(Asset([1; 32])), Some(Asset([2; 32])));
+        let ad = |key: &str, min, max, bps, flat, available| Ad {
+            name: key.into(),
+            claim_pub: key.into(),
+            terms: Terms { btc_asset: pair.0, evm_asset: pair.1, min, max, fee_bps: bps, flat, available },
+            reverse: false,
+            reverse_terms: None,
+        };
+        let mine = ad("02me", 20_000, 97_758, 15, 500, Some(97_758));
+        st.apply(signal(Signal::Started(Identity { claim_pub: "02me".into(), ..Default::default() }), None));
+        st.apply(Event::Info(Some(Box::new(Info { terms: mine.terms.clone(), books: None }))));
+
+        // one takes from 25,000 and charges more; one is cheaper at any size and has nothing left for the larger
+        st.apply(Event::Ads(Some(vec![mine, ad("03aa", 25_000, 1_000_000, 20, 800, None), ad("03bb", 20_000, 500_000, 5, 100, Some(30_000))])));
+
+        assert_eq!(st.rank_sizes(), [20_000, 97_758]);
+        assert_eq!((st.fee_rank(20_000), st.fee_rank(97_758), st.fee_rank(10_000)), (Some((2, 2)), Some((1, 2)), None));
     }
 }

@@ -4,14 +4,9 @@
 use super::model::{ChainTx, Direction, Outlook, PoolLock, PoolScan, Role, Swap};
 pub use crate::monitors::common::chain::{MAX_SWAPS, SETTLED, Status};
 use crate::monitors::common::chain::{Standing, rank, standing};
+use crate::monitors::common::pool::BLOCK_SECS;
+pub use crate::monitors::common::pool::POOL_SETTLED;
 use std::collections::{HashMap, HashSet};
-
-/// How far back the pool's log on Ethereum is read, in blocks: a day. A swap is open for hours.
-pub const POOL_LOOKBACK: u64 = 7_200;
-/// Blocks after which Ethereum does not take a transaction back: two epochs.
-pub const POOL_SETTLED: u64 = 64;
-/// Ethereum makes a block every twelve seconds, or skips one: never sooner.
-const BLOCK_SECS: u64 = 12;
 
 /// How many of the key's verdicts on notes sent away are kept, oldest out first. The feed and the state keep the
 /// same ones by this rule, so neither forgets a verdict the other still holds.

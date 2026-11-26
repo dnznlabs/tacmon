@@ -4,11 +4,11 @@
 use super::{
     config::Refresh,
     ledger,
-    model::{Ad, ChainTx, Health, Info, LogEntry, Outlook, Quotes, ReverseSide, Signal, Swap},
+    model::{Ad, ChainTx, Health, Info, LogEntry, Outlook, PoolScan, Quotes, ReverseSide, Signal, Swap},
     ports::{Ports, QUEUE},
 };
 use crate::{
-    monitors::common::{chain::Turns, feed::Out},
+    monitors::common::{chain::Turns, feed::Out, pool::PoolReader},
     shell::monitor::Wake,
 };
 use std::{collections::HashSet, time::Duration};
@@ -44,13 +44,15 @@ pub enum Event {
         wanted: Vec<String>,
     },
     Outlook(Option<Outlook>),
+    /// The pool's log on Ethereum as far as it has been read, whole each time.
+    Pool(Option<PoolScan>),
 }
 
 /// `pool_account` empty means: learn it from the log's start line. Must be called inside the runtime.
 pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) -> Receiver<Event> {
     let (tx, rx) = channel(QUEUE);
     let out = Out { tx, wake };
-    let Ports { provider, board, swaps, gas, chain, log } = ports;
+    let Ports { provider, board, swaps, gas, chain, pool, log } = ports;
     let learn = pool_account.is_empty();
     let (pool_tx, mut pool_rx) = watch::channel(pool_account);
     // the main address and the reverse one, as far as the log has named them
@@ -159,6 +161,20 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
         });
     }
 
+    if let Some(pool) = pool {
+        // not under 30 s: a block comes every 12 s, and the node is a shared public one
+        let (o, every) = (out.clone(), Duration::from_secs(refresh.eth_secs.max(30)));
+        tokio::spawn(async move {
+            let mut reader = PoolReader::default();
+            loop {
+                if !o.send(Event::Pool(reader.read(pool.as_ref()).await)).await {
+                    return;
+                }
+                sleep(every).await;
+            }
+        });
+    }
+
     if let Some(gas) = gas {
         let (o, every) = (out, Duration::from_secs(refresh.eth_secs.max(10)));
         tokio::spawn(async move {
@@ -185,7 +201,7 @@ mod tests {
     use super::*;
     use crate::monitors::btc_eth::{
         adapters::memory::{Memory, create_memory_ports},
-        model::{Identity, Level, Role, Terms},
+        model::{Identity, Level, PoolLock, Role, Terms},
     };
     use std::sync::{Arc, atomic::AtomicBool};
     use tokio::sync::mpsc::unbounded_channel;
@@ -204,6 +220,8 @@ mod tests {
             txs: vec![(main.into(), vec![tx('a')]), (reverse.into(), vec![tx('r')])],
             lookups: vec![tx('a'), tx('b')],
             outlook: Outlook { tip: 9, hour_milli: 1_000 },
+            eth_tip: 50,
+            pool_locks: vec![PoolLock { leaf: id('d'), tx: format!("0x{}", id('e')), block: 40, time: None }],
             ..Default::default()
         };
         let started = LogEntry {
@@ -216,7 +234,7 @@ mod tests {
 
         let mut rx = start(create_memory_ports(data, vec![started, reverse_on]), &Refresh::default(), String::new(), wake);
 
-        const FAILED: usize = 12;
+        const FAILED: usize = 13;
         let mut seen = [false; FAILED];
         while seen.iter().any(|s| !s) {
             let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("an event in time").expect("the feed");
@@ -228,6 +246,7 @@ mod tests {
                 Event::Ads(a) => a.map_or(FAILED, |_| 4),
                 Event::Swaps(s) => s.map_or(FAILED, |s| if s.len() == 1 { 5 } else { FAILED }),
                 Event::Eth(e) => e.map_or(FAILED, |e| if e == 0.25 { 6 } else { FAILED }),
+                Event::Pool(p) => p.map_or(FAILED, |p| if (p.tip, p.locks.len()) == (50, 1) { 12 } else { FAILED }),
                 Event::Quotes(q) => q.map_or(FAILED, |q| if q.count == 3 { 11 } else { FAILED }),
                 Event::MainTxs(t) => t.map_or(FAILED, |t| if t == [tx('a')] { 7 } else { FAILED }),
                 Event::ReverseTxs(t) => t.map_or(FAILED, |t| if t == [tx('r')] { 8 } else { FAILED }),
