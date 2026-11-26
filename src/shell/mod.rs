@@ -249,11 +249,11 @@ impl Shell {
         .areas(f.area());
         let picked = Style::new().fg(th.accent).add_modifier(Modifier::BOLD | Modifier::REVERSED);
         if many {
-            f.render_widget(Tabs::new(self.monitors.iter().map(|m| m.title())).select(self.at).style(th.dim()).highlight_style(picked), bar);
+            f.render_widget(Tabs::new(self.monitors.iter().map(|m| m.id())).select(self.at).style(th.dim()).highlight_style(picked), bar);
         }
         let title = Line::from(vec![
             Span::styled(" tacmon ", Style::new().fg(th.accent).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{} ", m.title().to_lowercase()), th.dim()),
+            Span::styled(format!("{} ", m.id()), th.dim()),
             Span::raw(format!("{} ", m.subject())),
         ]);
         let frame = Block::bordered().border_style(Style::new().fg(th.accent)).title(title);
@@ -300,9 +300,6 @@ mod tests {
         impl Monitor for Blank {
             fn id(&self) -> &'static str {
                 "blank"
-            }
-            fn title(&self) -> &'static str {
-                "Blank"
             }
             fn subject(&self) -> String {
                 String::new()

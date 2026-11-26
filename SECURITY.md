@@ -15,7 +15,7 @@ It watches a service that holds funds. It never holds them itself.
 
 | It does | It never does |
 |---|---|
-| reads the provider's local API, swap records of both directions and log | read, ask for or store a private key |
+| reads each watched provider's local API, swap records of both directions and log | read, ask for or store a private key |
 | reads the public board over HTTPS | sign or send a transaction |
 | optionally asks one Ethereum RPC for one balance, and for the pool contract's log of locks | write to the provider's data directory, or to any file |
 | optionally asks one Bitcoin explorer what is unspent and what has happened lately at the provider's two addresses, how its recent swaps' transactions stand, and the going fee rate | call the provider's write endpoints |
@@ -36,6 +36,12 @@ silently. tacmon starts the helper's `normalize` with `--txid <id>` added, the i
 main address, and only for a transaction that spends a note-sized coin of that address, which takes the provider's
 key to make: nobody else can have tacmon start the tool. It runs once for each such transaction, and again only for
 one it gave no answer for, ten minutes later.
+
+The `btc-eth` monitor watches a provider whose key Tacit's setup keeps in a file in its data directory
+(`provider.key`). tacmon opens `swaps/` and `reverse/swaps/` under that directory and no other path in it. That
+monitor starts no command but its `log_cmd`. Where its own `btc_explorer` is set it asks that explorer for the
+latest transactions at the provider's two addresses, for its recent swaps' transactions by id, and for the going
+fee rate; it does not ask what is unspent, or whether an output is spent.
 
 ## Threat model
 
@@ -69,10 +75,10 @@ These are what the review is told to break. Each names what holds it up.
 
 | # | Claim | Held up by |
 |---|---|---|
-| 1 | The binary reads, requests and stores no private key. `scripts/helpers/fast-bridge` reads the provider's, and passes it only to the environment of the tacit tool it runs. | review; there is no code path in the crate that takes one |
+| 1 | The binary reads, requests and stores no private key, and opens no file in a provider's data directory but its swap records. `scripts/helpers/fast-bridge` reads the provider's, and passes it only to the environment of the tacit tool it runs. | review; there is no code path in the crate that takes one |
 | 2 | Nothing is written to disk and no service is changed: every request is a read. | review |
 | 3 | No `unsafe` in this crate. | `#![forbid(unsafe_code)]`, enforced by the compiler; `make audit-checks` |
-| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, with the ids of transactions it listed at the main address itself when asked whether an output of one is spent, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. The RPC is sent the pool account, for its balance, and where `pool_contract` is set the pool contract's address, one event's topic and a range of blocks: no leaf, swap id or hash of the provider's. `eth_explorer` is never connected to. `--demo` makes none. | tests; review |
+| 4 | The only outbound connections are to hosts in the config, through a proxy where `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` names one. A redirect is never followed and its body is never read as an answer. The explorer (each monitor's own `btc_explorer`) is sent the provider's main and reverse addresses and the ids of the Bitcoin transactions its 50 most recent swaps name, with, from `fast-bridge` only, the ids of transactions it listed at the main address itself when asked whether an output of one is spent, and nothing else; only an address that reads as one, or 64 hex digits, goes into its URL. The RPC is sent the pool account, for its balance (by either monitor, each to its own `eth_rpc`, and by `btc-eth` only an account that reads as an address), and where `pool_contract` is set the pool contract's address, one event's topic and a range of blocks: no leaf, swap id or hash of the provider's. `eth_explorer` is never connected to. `--demo` makes none. | tests; review |
 | 5 | The only processes started are `log_cmd` and, where set, `status_cmd` and `normalize_cmd`, each with its arguments passed as a list and never through a shell, with no stdin, a status run's output held to 64 KiB and three minutes and a normalize run's to 64 KiB and ten. To `normalize_cmd` tacmon adds `--txid` and 64 hex digits, and nothing else. | tests; review |
 | 6 | TLS is rustls with the platform's certificate checks; there is no way to switch verification off. | `deny.toml` bans other TLS stacks; review |
 | 7 | Untrusted text cannot move the cursor, change colours or otherwise control the terminal. The one escape tacmon writes itself is OSC 52, to copy a Maintenance command or a transaction's explorer link: its text is built only from the values claim 11 holds and, for a link, the explorer address or site in the config, stripped of control characters other than newlines, capped at 8 KiB, and sent base64-encoded. | a test that draws control characters; review |
@@ -103,6 +109,9 @@ The method, its limits and every past review are in [`audits/`](audits/README.md
   you do not share.
 - **An ad posted under your key.** The board checks no signature. tacmon says when more than one ad uses the
   provider's key and does not take its name from one that carries other terms, but it cannot remove it.
+- **The provider's own books.** The `btc-eth` monitor's fees, costs, losses, net, notes and price are the
+  provider's figures, from `/info` and its log, shown as its count. tacmon does not recompute them from the
+  chain, and a swap's fee is read from a log line: it is a dash where the log read does not reach.
 - **A false ad or a false want.** tacmon verifies no signature on either, and anyone can make a key. The Advisor compares only against
   ads that could take the same bridges and names the one it compares with, but a careful false ad still moves
   its advice, and false wants still move the demand it reports. Treat both pages as what the board says.

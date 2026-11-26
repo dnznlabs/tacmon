@@ -1,6 +1,6 @@
 //! Configuration: a TOML file, every field optional. The shell owns the theme; each monitor owns a section.
 
-use crate::monitors::fast_bridge::FastBridgeConfig;
+use crate::monitors::{btc_eth::BtcEthConfig, fast_bridge::FastBridgeConfig};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ pub struct Config {
     pub splash: bool,
     pub theme: ThemeConfig,
     pub fast_bridge: FastBridgeConfig,
+    pub btc_eth: BtcEthConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +28,7 @@ pub struct ThemeConfig {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { splash: true, theme: ThemeConfig::default(), fast_bridge: FastBridgeConfig::default() }
+        Self { splash: true, theme: ThemeConfig::default(), fast_bridge: FastBridgeConfig::default(), btc_eth: BtcEthConfig::default() }
     }
 }
 

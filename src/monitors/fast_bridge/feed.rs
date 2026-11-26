@@ -7,15 +7,15 @@ use super::{
     model::{Ad, ChainTx, Coin, Health, LogEntry, Outlook, PoolScan, ReverseSide, ReverseStock, Signal, Swap, Terms, Want},
     ports::{PoolLog, Ports, QUEUE, SilentCheck},
 };
-use crate::shell::monitor::Wake;
+use crate::{
+    monitors::common::{chain::Turns, feed::Out},
+    shell::monitor::Wake,
+};
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
 
-/// The most transactions asked about by id in one round. The explorer is a shared public service, and a provider
-/// with a long history catches up over a few rounds.
-const MAX_LOOKUPS: usize = 12;
 /// The most transactions whose notes sent away are asked about in one round.
 const MAX_AWAY: usize = 6;
 /// How long before a transaction the key-holding tool could not judge is put to it again.
@@ -30,7 +30,7 @@ const REREAD: u64 = 12;
 const MAX_POOL_LOCKS: usize = 4096;
 use tokio::{
     sync::{
-        mpsc::{Receiver, Sender, channel},
+        mpsc::{Receiver, channel},
         watch,
     },
     time::sleep,
@@ -202,23 +202,6 @@ async fn judge(silent: &dyn SilentCheck, ids: &[String], judged: &mut Judged) ->
     (verdicts, None)
 }
 
-#[derive(Clone)]
-struct Out {
-    tx: Sender<Event>,
-    wake: Wake,
-}
-
-impl Out {
-    /// `false` once the monitor has gone, which ends the task that asked. Waits while the queue is full.
-    async fn send(&self, ev: Event) -> bool {
-        // woken first as well: a reader waiting on a full queue needs the shell to come and empty it
-        self.wake.wake();
-        let ok = self.tx.send(ev).await.is_ok();
-        self.wake.wake();
-        ok
-    }
-}
-
 /// `pool_account` empty means: learn it from the log's start line. `reverse_address` is the configured one, until the
 /// log names the address the side actually sells from. Must be called inside the runtime.
 pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_address: String, wake: Wake) -> Receiver<Event> {
@@ -304,7 +287,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_addr
         let (o, every) = (out.clone(), Duration::from_secs(refresh.chain_secs.max(30)));
         tokio::spawn(async move {
             // ids answered as settled are not asked again; the rest take turns, the one asked longest ago first
-            let (mut settled, mut asked, mut round) = (HashSet::<String>::new(), HashMap::<String, u64>::new(), 0u64);
+            let (mut turns, mut round) = (Turns::default(), 0u64);
             let mut away = AwayTurns::default();
             loop {
                 round += 1;
@@ -368,24 +351,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_addr
                         changed
                     });
                 }
-                settled.retain(|id| wanted.contains(id));
-                asked.retain(|id, _| wanted.contains(id));
-                let mut ask: Vec<String> = wanted.iter().filter(|id| !listed.contains(*id) && !settled.contains(*id)).cloned().collect();
-                ask.sort_by_key(|id| asked.get(id).copied().unwrap_or(0));
-                let (mut found, mut answered) = (Vec::new(), true);
-                for id in ask.into_iter().take(MAX_LOOKUPS) {
-                    match chain.tx(&id).await {
-                        Ok(tx) => {
-                            let deep = |t: &ChainTx| t.height.zip(outlook).is_some_and(|(h, o)| o.tip.saturating_sub(h).saturating_add(1) >= ledger::SETTLED);
-                            if tx.as_ref().is_some_and(deep) {
-                                settled.insert(id.clone());
-                            }
-                            found.push((id.clone(), tx));
-                        }
-                        Err(_) => answered = false,
-                    }
-                    asked.insert(id, round);
-                }
+                let (found, answered) = turns.ask(chain.as_ref(), &wanted, &listed, outlook).await;
                 if !o.send(Event::NotesAway(waiting)).await || !o.send(Event::Lookups { found, answered, wanted }).await {
                     return;
                 }
