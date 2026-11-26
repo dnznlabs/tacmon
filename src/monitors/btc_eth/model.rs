@@ -1,7 +1,9 @@
 //! What a provider of Bitcoin for ETH is, as this monitor sees it. No I/O and no wire formats here.
 //! Two units, and a name always says which: sats on Bitcoin, and pool ETH in units of 1e-8 ETH.
 
-pub use crate::monitors::common::model::{Asset, ChainTx, Health, Level, Outlook, PoolLock, PoolScan, effective_bps, fee_on, rate, total};
+pub use crate::monitors::common::model::{
+    Asset, ChainTx, Coin, Flag, HIGH_FEE_BPS, Health, Level, Outlook, PoolLock, PoolScan, Step, effective_bps, fee_on, flag, rate, total,
+};
 
 /// Sats in a bitcoin, and pool units in an ETH: the pool counts ETH to 8 places.
 pub const UNIT: u128 = 100_000_000;

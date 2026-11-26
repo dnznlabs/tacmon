@@ -4,6 +4,7 @@
 //! in one is a transaction id, an index, an amount or an address the wire readers have already held to a character
 //! set no shell reads anything into.
 
+pub use super::model::Step;
 use super::{
     ledger::{LockWait, Place, TxRow},
     model::{Coin, Direction, Level, ReverseSide, Swap, UNIT, rate, tac},
@@ -57,14 +58,6 @@ pub struct TakeNote {
     pub vouts: Vec<u32>,
     pub tac: u128,
     pub created: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Step {
-    pub level: Level,
-    pub text: String,
-    /// The command, one line per argument group, joined with ` \` so it pastes as one.
-    pub cmd: Vec<String>,
 }
 
 pub struct Upkeep {
@@ -262,7 +255,7 @@ pub fn upkeep(f: &Facts) -> Upkeep {
         steps.push(step(
             Level::Info,
             "The reverse address holds TAC and sats, and the side is off. To switch it on, add FB_LP_REVERSE=on to the provider's environment and restart it:",
-            vec!["sudoedit /etc/tacit-fastbridge-lp/env".into(), "sudo systemctl restart tacit-fastbridge-lp".into()],
+            vec!["sudoedit /etc/tacit-fastbridge-lp/env &&".into(), "  sudo systemctl restart tacit-fastbridge-lp".into()],
         ));
     }
 

@@ -4,7 +4,7 @@
 use super::{
     config::Refresh,
     ledger,
-    model::{Ad, ChainTx, Health, Info, LogEntry, Outlook, PoolScan, Quotes, ReverseSide, Signal, Swap},
+    model::{Ad, ChainTx, Coin, Health, Info, LogEntry, Outlook, PoolScan, Quotes, ReverseSide, Signal, Swap},
     ports::{Ports, QUEUE},
 };
 use crate::{
@@ -34,6 +34,9 @@ pub enum Event {
     /// The latest transactions at the main address, and at the reverse one.
     MainTxs(Option<Vec<ChainTx>>),
     ReverseTxs(Option<Vec<ChainTx>>),
+    /// The unspent coins at the main address, and at the reverse one: what each holds now.
+    MainCoins(Option<Vec<Coin>>),
+    ReverseCoins(Option<Vec<Coin>>),
     /// Swap transactions asked about by id this round: `None` beside one the explorer does not know.
     Lookups {
         found: Vec<(String, Option<ChainTx>)>,
@@ -48,15 +51,16 @@ pub enum Event {
     Pool(Option<PoolScan>),
 }
 
-/// `pool_account` empty means: learn it from the log's start line. Must be called inside the runtime.
-pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) -> Receiver<Event> {
+/// `pool_account` empty means: learn it from the log's start line. `reverse_address` is the configured one, held
+/// until the log names the reverse side's own. Must be called inside the runtime.
+pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_address: String, wake: Wake) -> Receiver<Event> {
     let (tx, rx) = channel(QUEUE);
     let out = Out { tx, wake };
     let Ports { provider, board, swaps, gas, chain, pool, log } = ports;
     let learn = pool_account.is_empty();
     let (pool_tx, mut pool_rx) = watch::channel(pool_account);
     // the main address and the reverse one, as far as the log has named them
-    let (addr_tx, mut addr_rx) = watch::channel((String::new(), String::new()));
+    let (addr_tx, mut addr_rx) = watch::channel((String::new(), reverse_address.clone()));
     // the transactions the swap records name, for the chain task to ask about
     let (linked_tx, linked_rx) = watch::channel(Vec::<String>::new());
 
@@ -70,7 +74,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
                         let _ = pool_tx.send(id.pool_account.clone());
                     }
                     // a provider that has started again says afresh whether it has a reverse address
-                    addr_tx.send_modify(|a| *a = (id.bitcoin_address.clone(), String::new()));
+                    addr_tx.send_modify(|a| *a = (id.bitcoin_address.clone(), reverse_address.clone()));
                 }
                 Some(Signal::ReverseOn(address)) => addr_tx.send_modify(|a| a.1.clone_from(address)),
                 _ => {}
@@ -140,12 +144,18 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, wake: Wake) 
                     let chain = &chain;
                     async move { if address.is_empty() { None } else { Some(chain.history(&address).await.ok()) } }
                 };
-                let (m, r, outlook) = tokio::join!(list(main), list(reverse), chain.outlook());
+                let held = |address: String| {
+                    let chain = &chain;
+                    async move { if address.is_empty() { None } else { Some(chain.unspent(&address).await.ok()) } }
+                };
+                let (m, r, mc, rc, outlook) = tokio::join!(list(main.clone()), list(reverse.clone()), held(main), held(reverse), chain.outlook());
                 let outlook = outlook.ok();
                 // a transaction listed at an address needs no asking by id
                 let listed: HashSet<String> = m.iter().chain(&r).flatten().flatten().map(|t| t.txid.clone()).collect();
                 // what the explorer has already answered is not held back by the lookups, which can be slow
-                for ev in [m.map(Event::MainTxs), r.map(Event::ReverseTxs), Some(Event::Outlook(outlook))].into_iter().flatten() {
+                let read =
+                    [m.map(Event::MainTxs), r.map(Event::ReverseTxs), mc.map(Event::MainCoins), rc.map(Event::ReverseCoins), Some(Event::Outlook(outlook))];
+                for ev in read.into_iter().flatten() {
                     if !o.send(ev).await {
                         return;
                     }
@@ -218,6 +228,7 @@ mod tests {
             // "a" is listed at the main address and so not asked about by id; "b" is known by id alone; "c" not at all
             swaps: vec![Swap { linked: vec![(Role::Take, id('a')), (Role::UserLock, id('b')), (Role::Refund, id('c'))], ..Default::default() }],
             txs: vec![(main.into(), vec![tx('a')]), (reverse.into(), vec![tx('r')])],
+            coins: vec![(reverse.into(), vec![Coin { txid: id('r'), vout: 0, sats: 140_000, confirmed: true }])],
             lookups: vec![tx('a'), tx('b')],
             outlook: Outlook { tip: 9, hour_milli: 1_000 },
             eth_tip: 50,
@@ -232,9 +243,9 @@ mod tests {
         let (wake_tx, _wake_rx) = unbounded_channel();
         let wake = Wake::new(wake_tx, Arc::new(AtomicBool::new(false)));
 
-        let mut rx = start(create_memory_ports(data, vec![started, reverse_on]), &Refresh::default(), String::new(), wake);
+        let mut rx = start(create_memory_ports(data, vec![started, reverse_on]), &Refresh::default(), String::new(), String::new(), wake);
 
-        const FAILED: usize = 13;
+        const FAILED: usize = 15;
         let mut seen = [false; FAILED];
         while seen.iter().any(|s| !s) {
             let ev = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("an event in time").expect("the feed");
@@ -251,6 +262,9 @@ mod tests {
                 Event::MainTxs(t) => t.map_or(FAILED, |t| if t == [tx('a')] { 7 } else { FAILED }),
                 Event::ReverseTxs(t) => t.map_or(FAILED, |t| if t == [tx('r')] { 8 } else { FAILED }),
                 Event::Outlook(o) => o.map_or(FAILED, |o| if o.tip == 9 { 9 } else { FAILED }),
+                // the main address holds nothing: an empty list, which is not a failed read
+                Event::MainCoins(c) => c.map_or(FAILED, |c| if c.is_empty() { 13 } else { FAILED }),
+                Event::ReverseCoins(c) => c.map_or(FAILED, |c| if c.iter().map(|c| c.sats).sum::<u64>() == 140_000 { 14 } else { FAILED }),
                 // a round before the records were read wants nothing, and one before the log named the main address
                 // has no list to find "a" in: neither is the round this test waits for
                 Event::Lookups { wanted, found, .. } if wanted.is_empty() || found.iter().any(|(asked, _)| *asked == id('a')) => continue,

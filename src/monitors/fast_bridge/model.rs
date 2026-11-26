@@ -1,7 +1,9 @@
 //! What a fast bridge provider is, as this monitor sees it. No I/O and no wire formats here.
 //! Amounts are TAC base units (8 decimal places) unless a name says otherwise.
 
-pub use crate::monitors::common::model::{Asset, ChainTx, Coin, DUST, Health, Level, Outlook, PoolLock, PoolScan, effective_bps, fee_on, rate, total};
+pub use crate::monitors::common::model::{
+    Asset, ChainTx, Coin, DUST, Flag, HIGH_FEE_BPS, Health, Level, Outlook, PoolLock, PoolScan, Step, effective_bps, fee_on, flag, rate, total,
+};
 
 pub const UNIT: u128 = 100_000_000;
 /// Which way a swap goes, as the bridger sees it.

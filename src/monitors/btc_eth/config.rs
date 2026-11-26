@@ -30,6 +30,11 @@ pub struct BtcEthConfig {
     pub btc_explorer: String,
     /// The pool account, when it should not be learned from the log.
     pub pool_account: String,
+    /// The reverse side's Bitcoin address, for before that side is on: the log names it once it is, and until then
+    /// only a tool with the key can (Tacit's setup prints it). The address to fund to turn ETH→BTC on.
+    pub reverse_address: String,
+    /// Fees (hundredths of a percent) compared on the Advisor page, beside the provider's own.
+    pub fee_ladder_bps: Vec<u64>,
     /// A swap's deadline turns red when it is closer than this.
     pub deadline_warn_secs: u64,
     /// A Bitcoin transaction unconfirmed for longer than this is marked as stuck.
@@ -61,6 +66,8 @@ impl Default for BtcEthConfig {
             eth_explorer: String::new(),
             btc_explorer: String::new(),
             pool_account: String::new(),
+            reverse_address: String::new(),
+            fee_ladder_bps: vec![5, 10, 20, 30, 50, 100, 150, 200],
             deadline_warn_secs: 3600,
             tx_stuck_secs: 1800,
             refresh: Refresh::default(),

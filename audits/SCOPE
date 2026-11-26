@@ -24,6 +24,7 @@ src/monitors/btc_eth/adapters/local.rs
 src/monitors/btc_eth/adapters/memory.rs
 src/monitors/btc_eth/adapters/mod.rs
 src/monitors/btc_eth/adapters/wire.rs
+src/monitors/btc_eth/advisor.rs
 src/monitors/btc_eth/config.rs
 src/monitors/btc_eth/feed.rs
 src/monitors/btc_eth/ledger.rs
@@ -32,6 +33,7 @@ src/monitors/btc_eth/model.rs
 src/monitors/btc_eth/ports.rs
 src/monitors/btc_eth/state.rs
 src/monitors/btc_eth/ui.rs
+src/monitors/btc_eth/upkeep.rs
 src/monitors/common/chain.rs
 src/monitors/common/feed.rs
 src/monitors/common/http.rs

@@ -1,12 +1,14 @@
 //! What the pages draw, and what each event from the feed does to it.
 
 use super::{
+    advisor::{self, Advice, Cost, Rival},
     config::BtcEthConfig,
     feed::Event,
     ledger::{self, TxRow},
     model::*,
+    upkeep::{self, Held, Place},
 };
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 const MAX_LOG: usize = 5000;
@@ -21,14 +23,23 @@ pub const REF_ETH: u128 = 5_000_000;
 pub enum Page {
     Overview,
     Activity,
-    Market,
     Books,
+    Market,
+    Advisor,
+    Maintenance,
     Transactions,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [Page::Overview, Page::Activity, Page::Market, Page::Books, Page::Transactions];
-    pub const TITLES: [&'static str; 5] = ["Overview", "Log", "Market", "Books", "Tx"];
+    // Market, Advisor, Maint and Tx sit where the fast bridge monitor has them: a key means the same page in both
+    pub const ALL: [Page; 7] = [Page::Overview, Page::Activity, Page::Books, Page::Market, Page::Advisor, Page::Maintenance, Page::Transactions];
+    pub const TITLES: [&'static str; 7] = ["Overview", "Log", "Books", "Market", "Advisor", "Maint", "Tx"];
+}
+
+/// An ad's name as the pages show it. One that gives none gets the provider's own default: "Provider" and the first
+/// six hex digits after the key's prefix byte.
+pub fn shown_name(a: &Ad) -> String {
+    if a.name.is_empty() { format!("Provider {}", a.claim_pub.get(2..8).unwrap_or("")) } else { a.name.clone() }
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +57,13 @@ pub struct State {
     pub only_warn: bool,
     /// Market: which direction's terms the ads are listed by.
     pub market_dir: Direction,
+    /// Maintenance: which command is picked, counting only the steps that have one. Kept in range where it is read,
+    /// since the steps change under it.
+    pick: usize,
+    /// Where the provider is on this machine, for the commands the Maintenance page prints.
+    place: Place,
+    /// Advisor: the fees compared, in hundredths of a percent.
+    ladder: Vec<u64>,
     /// Transactions: the picked row's id, and where it was, for when that transaction is no longer listed.
     tx_pick: Option<(String, usize)>,
     /// Where a transaction's page is on the configured explorer's site. Empty with no explorer: the id is copied bare.
@@ -83,11 +101,14 @@ pub struct State {
     /// The pair the provider last said it serves. Kept when `/info` stops answering.
     pair: (Option<Asset>, Option<Asset>),
     pub ads_ok: bool,
+    /// Whether the board's ads have ever been read: until they have, no other provider is not the same as none.
+    pub ads_seen: bool,
     /// The reverse side as last read, and whether the last read answered.
     pub reverse: Option<ReverseSide>,
     pub reverse_ok: bool,
-    /// The address the reverse side sells from, once the log has named it.
+    /// The address the reverse side sells from: the log's word once that side is on, the configured one until then.
     pub reverse_address: String,
+    reverse_address_set: String,
     /// The price the provider started with (ETH per BTC) and when it said so, where the line gave a time.
     pub start_price: Option<(f64, Option<u64>)>,
     /// Whether the provider has a price to quote from, by its log's last word. `None`: the log has not said.
@@ -103,6 +124,11 @@ pub struct State {
     pub main_txs_ok: bool,
     pub reverse_txs: Option<Vec<ChainTx>>,
     pub reverse_txs_ok: bool,
+    /// The unspent coins at each address, and whether the last read of each answered. `None`: never read.
+    pub main_coins: Option<Vec<Coin>>,
+    pub main_coins_ok: bool,
+    pub reverse_coins: Option<Vec<Coin>>,
+    pub reverse_coins_ok: bool,
     /// Swap transactions asked about by id: `Some(None)` is one the explorer does not know. Whether every one asked last was answered.
     looked: HashMap<String, Option<ChainTx>>,
     pub lookups_ok: bool,
@@ -130,6 +156,9 @@ impl State {
             scroll: [0; Page::ALL.len()],
             only_warn: false,
             market_dir: Direction::Forward,
+            pick: 0,
+            place: Place::new(&cfg.data_dir.to_string_lossy(), &cfg.log_cmd, &cfg.lp_url),
+            ladder: cfg.fee_ladder_bps.clone(),
             tx_pick: None,
             // an Esplora API lives under /api of the site whose pages show a transaction at /tx/<id>
             tx_link: Some(cfg.btc_explorer.trim_end_matches('/'))
@@ -157,9 +186,11 @@ impl State {
             all_ads: Vec::new(),
             pair: (None, None),
             ads_ok: false,
+            ads_seen: false,
             reverse: None,
             reverse_ok: false,
-            reverse_address: String::new(),
+            reverse_address: cfg.reverse_address.clone(),
+            reverse_address_set: cfg.reverse_address.clone(),
             start_price: None,
             priced: None,
             fees: HashMap::new(),
@@ -169,6 +200,10 @@ impl State {
             main_txs_ok: false,
             reverse_txs: None,
             reverse_txs_ok: false,
+            main_coins: None,
+            main_coins_ok: false,
+            reverse_coins: None,
+            reverse_coins_ok: false,
             looked: HashMap::new(),
             lookups_ok: true,
             outlook: None,
@@ -223,6 +258,7 @@ impl State {
             Event::Ads(a) => {
                 self.ads_ok = a.is_some();
                 if let Some(a) = a {
+                    self.ads_seen = true;
                     self.all_ads = a;
                     self.sift();
                 }
@@ -251,6 +287,14 @@ impl State {
                     self.reverse_txs = t;
                     self.see_unconfirmed();
                 }
+            }
+            Event::MainCoins(c) => {
+                self.main_coins_ok = c.is_some();
+                self.main_coins = c.or(self.main_coins.take());
+            }
+            Event::ReverseCoins(c) => {
+                self.reverse_coins_ok = c.is_some();
+                self.reverse_coins = c.or(self.reverse_coins.take());
             }
             Event::Lookups { found, answered, wanted } => {
                 self.lookups_ok = answered;
@@ -322,7 +366,98 @@ impl State {
         })
     }
 
+    /// What a swap costs the provider, by its books and the price it values its sats at.
+    pub fn swap_cost(&self) -> Option<Cost> {
+        advisor::cost(self.books.as_ref()?, self.price().map(|(p, ..)| p))
+    }
+    /// Where the fee of one direction stands. `None` while that direction's terms are not known, or it is off.
+    pub fn advice(&self, d: Direction) -> Option<Advice> {
+        let own = match d {
+            Direction::Forward => self.terms.as_ref()?,
+            Direction::Reverse => self.reverse_terms()?,
+        };
+        let mine = self.my_ad();
+        let named: Vec<(String, &Terms)> = self
+            .ads
+            .iter()
+            .filter(|a| !mine.is_some_and(|m| std::ptr::eq(m, *a)))
+            .filter_map(|a| {
+                let terms = if d == Direction::Forward { Some(&a.terms) } else { a.reverse_terms.as_ref() };
+                Some((shown_name(a), terms?))
+            })
+            .collect();
+        let rivals: Vec<Rival> = named.iter().map(|(name, terms)| Rival { name, terms }).collect();
+        let (cost, step) = match d {
+            Direction::Forward => (self.swap_cost().and_then(|c| c.as_sats), 1_000),
+            Direction::Reverse => (self.swap_cost().and_then(|c| c.as_eth), UNIT / 1_000),
+        };
+        Some(advisor::advise(own, self.ads_seen.then_some(rivals.as_slice()), &self.ladder, cost, step))
+    }
+
+    /// What an address holds by the explorer's list of its coins: confirmed sats, then sats still unconfirmed.
+    pub fn held(coins: Option<&[Coin]>) -> Option<Held> {
+        let sum = |confirmed: bool| coins.map(|c| c.iter().filter(|c| c.confirmed == confirmed).map(|c| c.sats).sum::<u64>());
+        Some(Held { confirmed: sum(true)?, unconfirmed: sum(false)?, coins: coins?.len() })
+    }
+
+    /// The Maintenance page's steps.
+    pub fn upkeep(&self) -> Vec<Step> {
+        let stuck = self.stuck();
+        let lost: Vec<&str> = self.swaps.iter().filter(|s| s.lost()).map(|s| s.id.as_str()).collect();
+        upkeep::upkeep(&upkeep::Facts {
+            place: &self.place,
+            healthy: self.healthy,
+            health_error: &self.health_error,
+            terms: self.terms.as_ref(),
+            open: self.swaps.iter().filter(|s| !s.closed()).count(),
+            promised: self.cap_seen.then_some(self.cap.promised),
+            notes: self.notes(),
+            reverse: self.reverse.as_ref(),
+            reverse_address: &self.reverse_address,
+            reverse_held: Self::held(self.reverse_coins.as_deref()),
+            pool_account: &self.id.pool_account,
+            gas: self.eth,
+            priced: self.priced,
+            on_board: self.on_board(),
+            quotes: self.quotes,
+            stuck: &stuck,
+            lost: &lost,
+            explorer: self.explorer,
+            hour_milli: self.outlook.map(|o| o.hour_milli),
+            now: self.now,
+        })
+    }
+    /// The commands on the Maintenance page as they paste: one per step that has one, its lines joined with ` \`.
+    pub fn commands(&self) -> Vec<String> {
+        self.upkeep().iter().filter(|s| !s.cmd.is_empty()).map(|s| s.cmd.join(" \\\n")).collect()
+    }
+    /// The picked command's place among them, or `None` when there is none.
+    pub fn picked(&self) -> Option<usize> {
+        let n = self.commands().len();
+        (n > 0).then(|| self.pick.min(n - 1))
+    }
+
     pub fn on_key(&mut self, page: Page, k: KeyEvent) {
+        if page == Page::Maintenance {
+            let n = self.commands().len();
+            // shift picks; K and J too, for a terminal that sends shifted arrows as plain ones
+            let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+            let s = &mut self.scroll[page as usize];
+            match k.code {
+                KeyCode::Up if shift => self.pick = self.pick.min(n.saturating_sub(1)).saturating_sub(1),
+                KeyCode::Char('K') => self.pick = self.pick.min(n.saturating_sub(1)).saturating_sub(1),
+                KeyCode::Down if shift => self.pick = (self.pick + 1).min(n.saturating_sub(1)),
+                KeyCode::Char('J') => self.pick = (self.pick + 1).min(n.saturating_sub(1)),
+                KeyCode::Up | KeyCode::Char('k') => *s = s.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => *s += 1,
+                KeyCode::PageUp => *s = s.saturating_sub(10),
+                KeyCode::PageDown => *s += 10,
+                KeyCode::Char('g') | KeyCode::Home => *s = 0,
+                KeyCode::Char('c') | KeyCode::Enter => self.copy = self.picked().and_then(|i| self.commands().into_iter().nth(i)),
+                _ => {}
+            }
+            return;
+        }
         if page == Page::Transactions {
             // a table with a cursor: every arrow moves the pick, and the window follows it
             let rows = self.ledger();
@@ -377,7 +512,11 @@ impl State {
                 let pool = if self.pool_account_fixed { self.id.pool_account.clone() } else { id.pool_account.clone() };
                 self.id = Identity { pool_account: pool, ..id.clone() };
                 // a provider that has started again says afresh whether its reverse side is on and what it is priced at
-                self.reverse_address.clear();
+                self.reverse_address.clone_from(&self.reverse_address_set);
+                // what was read at another address is not what this one holds
+                if self.reverse_address.is_empty() {
+                    self.reverse_coins = None;
+                }
             }
             Some(Signal::Capacity(c)) => {
                 self.cap = c.clone();
@@ -506,7 +645,7 @@ impl State {
     /// would not take that size itself.
     pub fn fee_rank(&self, size: u128) -> Option<(usize, usize)> {
         let mine = self.my_ad()?;
-        let takes = |t: &Terms| (t.min..=t.max).contains(&size) && t.available.is_none_or(|a| a >= size);
+        let takes = |t: &Terms| advisor::takes(t, size);
         let cost = |t: &Terms| fee_on(size, t.fee_bps, t.flat);
         let rivals: Vec<&Ad> = self.ads.iter().filter(|a| takes(&a.terms)).collect();
         takes(&mine.terms).then(|| (1 + rivals.iter().filter(|a| cost(&a.terms) < cost(&mine.terms)).count(), rivals.len()))

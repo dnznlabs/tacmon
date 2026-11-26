@@ -38,6 +38,52 @@ pub fn effective_bps(amount: u128, bps: u64, flat: u128) -> u64 {
     fee_on(amount, bps, flat).checked_mul(10_000).and_then(|f| u64::try_from(f.div_ceil(amount)).ok()).unwrap_or(u64::MAX)
 }
 
+/// The app marks a swap as a high fee when the whole fee is over this share of the amount (its `warnFeeBps`).
+pub const HIGH_FEE_BPS: u64 = 500;
+
+/// Where the app's high-fee mark falls on the sizes a provider takes. The flat part weighs most on a small swap, so
+/// the mark can start part way up the size range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flag {
+    Never,
+    Always,
+    /// Sizes under this are marked; this size and larger are not.
+    Under(u128),
+}
+
+/// The app's own rule (`fee * 10000 > amount * warnFeeBps`), on one swap.
+pub fn flagged(amount: u128, bps: u64, flat: u128) -> bool {
+    fee_on(amount, bps, flat).checked_mul(10_000).is_none_or(|f| f > amount.saturating_mul(u128::from(HIGH_FEE_BPS)))
+}
+
+/// The mark across `min..=max`. The fee's share only falls as a swap grows, so the smallest size decides `Never`,
+/// the largest `Always`, and the edge between them is found by halving. The app's rounding makes the edge ragged by
+/// a base unit or so: rounded up to a whole `step`, it reads as the size it is.
+pub fn flag(min: u128, max: u128, bps: u64, flat: u128, step: u128) -> Flag {
+    if min > max || !flagged(min, bps, flat) {
+        return Flag::Never;
+    }
+    if flagged(max, bps, flat) {
+        return Flag::Always;
+    }
+    let (mut low, mut high) = (min, max);
+    while high - low > 1 {
+        let mid = low + (high - low) / 2;
+        if flagged(mid, bps, flat) { low = mid } else { high = mid }
+    }
+    let step = step.max(1);
+    Flag::Under(high.div_ceil(step).saturating_mul(step).min(max))
+}
+
+/// One thing a Maintenance page says to do, and the command that does it where there is one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Step {
+    pub level: Level,
+    pub text: String,
+    /// The command, one line per part, joined with ` \` so it pastes as one.
+    pub cmd: Vec<String>,
+}
+
 /// The size of the output a Tacit note rides on. Anything larger is plain sats.
 pub const DUST: u64 = 546;
 

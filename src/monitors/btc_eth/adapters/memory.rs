@@ -22,6 +22,8 @@ pub struct Memory {
     pub eth: f64,
     /// The transactions listed at each address, the ones known by id only, and the chain's outlook.
     pub txs: Vec<(String, Vec<ChainTx>)>,
+    /// The unspent coins at each address.
+    pub coins: Vec<(String, Vec<Coin>)>,
     pub lookups: Vec<ChainTx>,
     pub outlook: Outlook,
     /// Ethereum's newest block, and every lock the pool's log holds.
@@ -39,8 +41,8 @@ impl PoolLog for Memory {
 }
 
 impl Chain for Memory {
-    fn unspent<'a>(&'a self, _address: &'a str) -> Fut<'a, Vec<Coin>> {
-        Box::pin(async move { Ok(Vec::new()) })
+    fn unspent<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<Coin>> {
+        Box::pin(async move { Ok(self.coins.iter().find(|(a, _)| a == address).map(|(_, c)| c.clone()).unwrap_or_default()) })
     }
     fn history<'a>(&'a self, address: &'a str) -> Fut<'a, Vec<ChainTx>> {
         Box::pin(async move { Ok(self.txs.iter().find(|(a, _)| a == address).map(|(_, t)| t.clone()).unwrap_or_default()) })
@@ -223,6 +225,11 @@ pub fn create_demo_ports(now: u64) -> Ports {
         ],
         quotes: Quotes { count: 9, last: Some(now - 240) },
         eth: 0.0188,
+        // what the reverse side sells from, and a take coin not yet moved there
+        coins: vec![
+            (reverse_address.into(), vec![Coin { txid: txid('d', "00000001"), vout: 0, sats: 840_000, confirmed: true }]),
+            (main.into(), vec![Coin { txid: txid('7', "c9d0e1f2"), vout: 0, sats: 449_580, confirmed: true }]),
+        ],
         txs: vec![
             // takes pay the main address; the reverse side's locks spend from its own, and one of them is paying too little
             (main.into(), vec![seen(txid('7', "c9d0e1f2"), 8_200, true, 420, 449_580, 0), seen(txid('7', "0a1b2c3d"), 29_000, true, 380, 149_620, 0)]),

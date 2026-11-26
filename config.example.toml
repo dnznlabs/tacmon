@@ -7,6 +7,12 @@ warn = "yellow"
 bad = "red"
 dim = "242"
 
+[shared]
+eth_rpc = ""
+pool_contract = ""
+eth_explorer = ""
+btc_explorer = ""
+
 [fast_bridge]
 enabled = false
 lp_url = "http://127.0.0.1:8787"
@@ -73,6 +79,17 @@ pool_contract = ""
 eth_explorer = ""
 btc_explorer = ""
 pool_account = ""
+reverse_address = ""
+fee_ladder_bps = [
+    5,
+    10,
+    20,
+    30,
+    50,
+    100,
+    150,
+    200,
+]
 deadline_warn_secs = 3600
 tx_stuck_secs = 1800
 

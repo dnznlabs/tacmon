@@ -3,6 +3,7 @@
 //! the provider's data directory but the swap records, and sends the provider nothing but GETs.
 
 pub mod adapters;
+mod advisor;
 mod config;
 mod feed;
 mod ledger;
@@ -10,6 +11,7 @@ mod model;
 mod ports;
 mod state;
 mod ui;
+mod upkeep;
 
 pub use config::BtcEthConfig;
 
@@ -37,7 +39,20 @@ pub struct BtcEth {
 pub fn create_btc_eth(cfg: &BtcEthConfig, demo: bool) -> BtcEth {
     let ports = if demo { adapters::memory::create_demo_ports(now()) } else { adapters::create_ports(cfg) };
     // a demo shows nothing of the operator's: the pool account in their config would otherwise sit in the header
-    let cfg = if demo { BtcEthConfig { pool_account: String::new(), ..cfg.clone() } } else { cfg.clone() };
+    // and where their provider is on this machine in the commands the Maintenance page prints
+    let cfg = if demo {
+        let made_up = BtcEthConfig::default();
+        BtcEthConfig {
+            pool_account: String::new(),
+            reverse_address: String::new(),
+            data_dir: made_up.data_dir,
+            log_cmd: made_up.log_cmd,
+            lp_url: made_up.lp_url,
+            ..cfg.clone()
+        }
+    } else {
+        cfg.clone()
+    };
     let state = State::new(&cfg, ports.gas.is_some(), ports.chain.is_some(), ports.pool.is_some());
     BtcEth { state, cfg, ports: Some(ports), events: None }
 }
@@ -52,9 +67,13 @@ impl Monitor for BtcEth {
     fn pages(&self) -> &'static [&'static str] {
         &Page::TITLES
     }
+    fn page_aliases(&self) -> &'static [(&'static str, usize)] {
+        // the tabs' full names, as the fast bridge monitor takes them
+        &[("activity", Page::Activity as usize), ("maintenance", Page::Maintenance as usize), ("transactions", Page::Transactions as usize)]
+    }
     fn start(&mut self, wake: Wake) {
         if let Some(ports) = self.ports.take() {
-            self.events = Some(feed::start(ports, &self.cfg.refresh, self.cfg.pool_account.clone(), wake));
+            self.events = Some(feed::start(ports, &self.cfg.refresh, self.cfg.pool_account.clone(), self.cfg.reverse_address.clone(), wake));
         }
     }
     fn refresh(&mut self, now: u64) {
@@ -83,6 +102,7 @@ impl Monitor for BtcEth {
     fn hints(&self, page: usize) -> &'static str {
         match Page::ALL[page] {
             Page::Transactions => "↑↓ pick a transaction · enter or c copy its explorer link",
+            Page::Maintenance => "↑↓ scroll · shift+↑↓ pick a command · c copy it · each step says where its command runs from",
             Page::Activity => "↑↓ scroll · g newest · w warnings only",
             Page::Market => "↑↓ scroll · d direction",
             _ => "↑↓ scroll",
@@ -96,10 +116,13 @@ mod tests {
 
     #[test]
     fn a_demo_shows_nothing_from_the_operators_config() {
-        let cfg = BtcEthConfig { pool_account: "0xmine".into(), ..Default::default() };
+        let cfg = BtcEthConfig { pool_account: "0xmine".into(), data_dir: "/srv/mine".into(), ..Default::default() };
 
         let (demo, live) = (create_btc_eth(&cfg, true), create_btc_eth(&cfg, false));
 
         assert_eq!((demo.state.id.pool_account.as_str(), demo.cfg.pool_account.as_str(), live.state.id.pool_account.as_str()), ("", "", "0xmine"));
+        // the commands the Maintenance page prints name where the provider's data is
+        let names_it = |m: &BtcEth| m.state.commands().iter().any(|c| c.contains("/srv/mine"));
+        assert!(!names_it(&demo) && names_it(&live));
     }
 }

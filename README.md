@@ -6,7 +6,7 @@ by **Ðenizen.** // dxnzn.wei
 
 `tacmon` is for operators: it watches the services **you run** for [Tacit](https://tacit.finance), on the machine you run them on, in the spirit of `htop` and `k9s`. It is not a way to watch Tacit in general: without a service of your own beside it, it has nothing to show. See [Who It Is For](#who-it-is-for).
 
-It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there are two: `fast-bridge`, for a fast bridge liquidity provider, and `btc-eth`, for a provider of Bitcoin for ETH. Each is read only: it never sees a service's key and never changes a service. Where keeping a service stocked needs the key, it prints the command and a separate helper runs it ([Maintenance](docs/fast-bridge.md#maintenance)).
+It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there are two: `fast-bridge`, for a fast bridge liquidity provider, and `btc-eth`, for a provider of Bitcoin for ETH. Each is read only: it never sees a service's key and never changes a service. Where keeping a service stocked needs the key, it prints the command and a separate tool runs it ([fast bridge](docs/fast-bridge.md#maintenance), [BTC-ETH](docs/btc-eth.md#maintenance)).
 
 ![tacmon running on its demo data: the start screen, then each page of the fast bridge monitor](docs/demo/demo.gif)
 
@@ -71,11 +71,13 @@ Turn it on with `enabled = true` under `[btc_eth]`. It expects a provider made w
 |:---|:---|:---|
 | `1` | Overview | open and finished swaps of both directions (way, phase, sats, ETH, the rate each trades at, the fee counted for it, deadline), latest warnings |
 | `2` | Log | the provider's log as a feed; `w` for warnings only |
-| `3` | Market | every provider of the pair on the board, cheapest first; `d` switches direction |
-| `4` | Books | the provider's own accounting: fees, costs, losses and net, its ETH notes and sats, the target, the lean and buybacks |
-| `5` | Tx | the Bitcoin transactions of its swaps and, with an explorer set, of its addresses: status, fee rate, and which are stuck; its pool locks on Ethereum where an RPC and the pool contract are set |
+| `3` | Books | the provider's own accounting: fees, costs, losses and net, its ETH notes and sats, the target, the lean and buybacks |
+| `4` | Market | every provider of the pair on the board, cheapest first; `d` switches direction |
+| `5` | Advisor | where its fee stands at the smallest and the largest swap it takes, what a swap costs it by its books, and from what size its fee covers that |
+| `6` | Maint | both directions' state, what is short, and the commands that fix it; `c` copies the picked one |
+| `7` | Tx | the Bitcoin transactions of its swaps and, with an explorer set, of its addresses: status, fee rate, and which are stuck; its pool locks on Ethereum where an RPC and the pool contract are set |
 
-**[The BTC-ETH monitor](docs/btc-eth.md)** has the rest: what it assumes, the two units, the header, the settings, and what it does not show yet.
+**[The BTC-ETH monitor](docs/btc-eth.md)** has the rest: what it assumes, the two units, the header, every page, the Maintenance commands, the settings, and what it does not show yet.
 
 ## Usage
 
@@ -92,6 +94,21 @@ tacmon --print-config         # The effective configuration, as TOML
 ### Configuration
 
 `~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.toml`](config.example.toml) is the defaults. `[theme]` belongs to the tool, and each monitor has a section of its own (`[fast_bridge]`, `[btc_eth]`).
+
+`[shared]` holds the outside services both monitors can use, so they are written once: `eth_rpc`, `pool_contract`, `eth_explorer` and `btc_explorer`. A monitor uses a shared one wherever its own setting of that name is empty, and its own wins where it is set. Setting one under `[shared]` turns that read on for every enabled monitor, and each sends it what its guide says.
+
+```toml
+[shared]
+btc_explorer = "https://blockstream.info/api"
+eth_explorer = "https://etherscan.io"
+
+[fast_bridge]
+enabled = true
+
+[btc_eth]
+enabled = true
+btc_explorer = "https://mempool.space/api"   # this monitor's own wins
+```
 
 Every monitor is off by default, so the file needs at least the line that turns one on:
 

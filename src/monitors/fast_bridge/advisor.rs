@@ -2,43 +2,13 @@
 
 use super::model::{Terms, UNIT, Want, effective_bps, fee_on, total};
 
-/// The app marks a bridge as a high fee when the whole fee is over this share of the amount (its `warnFeeBps`).
-pub const HIGH_FEE_BPS: u64 = 500;
+pub use super::model::{Flag, HIGH_FEE_BPS};
 /// The size fees are compared at, as on the Market page: a flat fee weighs more on a small bridge.
 pub const REFERENCE: u128 = 100 * UNIT;
 
-/// Where the app's high-fee mark falls on the bridges a provider takes. The flat part weighs most on a small
-/// bridge, so the mark can start part way up the size range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Flag {
-    Never,
-    Always,
-    /// Bridges under this size are marked; this size and larger are not.
-    Under(u128),
-}
-
-/// The app's own rule (`fee * 10000 > amount * warnFeeBps`), on one bridge.
-fn flagged(amount: u128, bps: u64, flat: u128) -> bool {
-    fee_on(amount, bps, flat).checked_mul(10_000).is_none_or(|f| f > amount.saturating_mul(u128::from(HIGH_FEE_BPS)))
-}
-
-/// The mark across `min..=max`. The fee's share only falls as a bridge grows, so the smallest size decides `Never`,
-/// the largest `Always`, and the edge between them is found by halving.
+/// Where the app's high-fee mark falls on the bridges a provider takes, to the cent of a TAC.
 pub fn flag(min: u128, max: u128, bps: u64, flat: u128) -> Flag {
-    if min > max || !flagged(min, bps, flat) {
-        return Flag::Never;
-    }
-    if flagged(max, bps, flat) {
-        return Flag::Always;
-    }
-    let (mut low, mut high) = (min, max);
-    while high - low > 1 {
-        let mid = low + (high - low) / 2;
-        if flagged(mid, bps, flat) { low = mid } else { high = mid }
-    }
-    // the app's rounding makes the edge ragged by a base unit or so; to the cent, rounded up, it reads as the size it is
-    let cent = UNIT / 100;
-    Flag::Under(high.div_ceil(cent).saturating_mul(cent).min(max))
+    super::model::flag(min, max, bps, flat, UNIT / 100)
 }
 
 /// A fee as the bridger meets it: the share and the flat part together, at the reference size.
@@ -165,7 +135,7 @@ pub fn advise(terms: &Terms, wants: &[Want], ladder: &[u64], others: Option<&[u6
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::monitors::fast_bridge::model::UNIT;
+    use crate::monitors::{common::model::flagged, fast_bridge::model::UNIT};
 
     fn terms() -> Terms {
         Terms { min: 10 * UNIT, max: 500 * UNIT, fee_bps: 150, flat: UNIT / 10, available: None, ..Default::default() }
