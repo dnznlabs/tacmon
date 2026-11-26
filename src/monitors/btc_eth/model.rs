@@ -178,8 +178,10 @@ impl Said {
     }
 }
 
-/// The quotes the provider has given, by the files it keeps of them: how many, and when the newest was written.
-/// A provider on the board that is never asked, or cannot be reached, gives none.
+/// The quotes the provider keeps a file of: how many, and when the newest was written. It is not the quotes it has
+/// given. A BTC→ETH quote is sealed into its id and written only once a user holds or locks for it, and the file
+/// goes again when the hold lapses with no lock; an ETH→BTC quote is written when given and pruned later. A provider
+/// that quotes all day with nobody going on keeps none.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Quotes {
     pub count: usize,

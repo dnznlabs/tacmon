@@ -7,7 +7,7 @@
 
 use super::{
     ledger::TxRow,
-    model::{Level, Notes, Quotes, ReverseSide, Step, Terms, eth, rate, sats},
+    model::{Level, Notes, ReverseSide, Step, Terms, eth, rate, sats},
 };
 use crate::fmt::{dur, short};
 
@@ -55,11 +55,16 @@ impl Place {
     fn status(&self) -> Vec<String> {
         vec![self.setup(" status")]
     }
-    /// Setup run again with the provider stopped: it shields what has arrived and writes the limits afresh.
+    /// Setup run again with the provider stopped: it shields what has arrived and writes the limits afresh. The
+    /// provider is started again whatever setup says: one that failed or was interrupted must not leave it stopped.
     fn again(&self) -> Vec<String> {
         match &self.unit {
             Some(u) => {
-                vec![format!("sudo systemctl stop {} &&", arg(u)), format!("  {} --no-start &&", self.setup("")), format!("  sudo systemctl start {}", arg(u))]
+                vec![
+                    format!("sudo systemctl stop {} &&", arg(u)),
+                    format!("  {{ {} --no-start;", self.setup("")),
+                    format!("  sudo systemctl start {}; }}", arg(u)),
+                ]
             }
             None => vec![format!("{} --no-start", self.setup(""))],
         }
@@ -76,7 +81,9 @@ impl Place {
 /// A value as a shell reads it for one argument: bare where every character is plain, else in single quotes.
 pub fn arg(s: &str) -> String {
     let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':' | '@' | '+' | ',' | '=');
-    if !s.is_empty() && s.chars().all(plain) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
+    // quoting does not stop a leading dash reading as an option: a path that starts with one is named from here
+    let s = if s.starts_with('-') { format!("./{s}") } else { s.to_string() };
+    if !s.is_empty() && s.chars().all(plain) { s } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
 pub struct Facts<'a> {
@@ -100,7 +107,6 @@ pub struct Facts<'a> {
     pub gas: Option<f64>,
     pub priced: Option<bool>,
     pub on_board: Option<bool>,
-    pub quotes: Option<Quotes>,
     /// The Tx page's stuck rows that are the provider's own.
     pub stuck: &'a [TxRow],
     /// The ids of the swaps that ended with the provider out of pocket.
@@ -202,8 +208,8 @@ pub fn upkeep(f: &Facts) -> Vec<Step> {
                 Level::Warn,
                 format!(
                     "It can take {} sats now, under its min of {}, so the app lists it as full. Send ETH (Ethereum mainnet) to {account}. Once it has arrived, \
-                     Tacit's setup shields it and writes the limits afresh, with the provider stopped (from a tacit checkout, as the provider's user; a size set by \
-                     hand in config.json is set again):",
+                     Tacit's setup shields it and writes the limits afresh, with the provider stopped and started again whatever setup says (from a tacit checkout, \
+                     as the provider's user; a size set by hand in config.json is set again):",
                     sats(a),
                     sats(t.min)
                 ),
@@ -248,6 +254,8 @@ pub fn upkeep(f: &Facts) -> Vec<Step> {
             } else {
                 format!("its reverse address, {}", f.reverse_address)
             };
+            // setup stops the provider for minutes: not offered while a swap waits on it
+            let busy = f.open > 0;
             let want = f.terms.map(|t| t.max.saturating_add(REVERSE_MARGIN_SATS));
             let much = want.map_or_else(String::new, |w| format!(" Tacit's guide is the max of a swap and {} sats more: {} sats.", sats(REVERSE_MARGIN_SATS), sats(w)));
             // what is there already, where an explorer says: a send that has arrived is not asked for again
@@ -264,9 +272,10 @@ pub fn upkeep(f: &Facts) -> Vec<Step> {
                 Level::Info,
                 format!(
                     "ETH→BTC is off. To turn it on, send Bitcoin to {to}.{much}{there} Wait for one confirmation, then run Tacit's setup again with the provider \
-                     stopped (from a tacit checkout, as the provider's user; it writes the limits afresh):"
+                     stopped (from a tacit checkout, as the provider's user; it writes the limits afresh, and the provider is started again whatever setup says){}",
+                    if busy { ". Not while a swap is under way: the command is here once none is." } else { ":" }
                 ),
-                f.place.again(),
+                if busy { vec![] } else { f.place.again() },
             ));
         }
         None => {}
@@ -280,15 +289,6 @@ pub fn upkeep(f: &Facts) -> Vec<Step> {
             f.place.status(),
         ));
     }
-    if f.on_board == Some(true) && f.quotes.is_some_and(|q| q.last.is_none()) {
-        steps.push(step(
-            Level::Info,
-            "It is on the board and has given no quote. A page takes the quote that pays most, so a provider that is dearer at the size asked is not picked: see \
-             the Advisor page. A page that failed to reach a provider also asks the others first for half an hour, by a count it keeps in the browser.",
-            vec![],
-        ));
-    }
-
     match f.notes {
         Some(Err(held)) => steps.push(step(
             Level::Info,
@@ -364,7 +364,6 @@ mod tests {
             gas: None,
             priced: None,
             on_board: None,
-            quotes: None,
             stuck: &[],
             lost: &[],
             explorer: true,
@@ -400,7 +399,10 @@ mod tests {
         assert_eq!((known.unit.as_deref(), known.port, odd.unit.as_deref(), odd.port), (Some("lp-btc"), Some(8788), None, None));
         // with no unit named there is nothing to stop or start, and no port is passed that was not given
         assert_eq!(cmd, [r"node fastbridge-lp/setup.mjs --data '/srv/my lp'\''s' --no-start"]);
-        assert_eq!((arg("a-b_c.d/e:1"), arg(""), arg("$(x)")), ("a-b_c.d/e:1".to_string(), "''".to_string(), "'$(x)'".to_string()));
+        assert_eq!(
+            (arg("a-b_c.d/e:1"), arg(""), arg("$(x)"), arg("-rf")),
+            ("a-b_c.d/e:1".to_string(), "''".to_string(), "'$(x)'".to_string(), "./-rf".to_string())
+        );
     }
 
     #[test]
@@ -417,8 +419,8 @@ mod tests {
             step.cmd,
             [
                 "sudo systemctl stop lp-btc &&",
-                "  node fastbridge-lp/setup.mjs --data /var/lib/lp-btc --port 8788 --no-start &&",
-                "  sudo systemctl start lp-btc"
+                "  { node fastbridge-lp/setup.mjs --data /var/lib/lp-btc --port 8788 --no-start;",
+                "  sudo systemctl start lp-btc; }"
             ]
         );
         let step = said(&lent, "lists it as full").expect("a step");
@@ -483,7 +485,6 @@ mod tests {
         };
 
         let steps = upkeep(&Facts { stuck: &[row], hour_milli: Some(1_690), now: 1_000, on_board: Some(false), ..facts(&p) });
-        let asked = upkeep(&Facts { on_board: Some(true), quotes: Some(Quotes { count: 0, last: None }), ..facts(&p) });
 
         let stuck = said(&steps, "unconfirmed").expect("a step");
         assert!(
@@ -494,7 +495,6 @@ mod tests {
             stuck.text
         );
         assert!(said(&steps, "Its ad is not on the board").is_some_and(|s| s.cmd.len() == 1));
-        assert!(said(&asked, "has given no quote").is_some() && said(&steps, "has given no quote").is_none());
     }
 
     #[test]

@@ -108,8 +108,9 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
         if tx.is_none() && standing.status == Status::Unknown {
             standing.rate_milli = said.and_then(|s| s.rate_milli());
             standing.at = said.and_then(|s| s.at);
-            if let (Some(Role::UserLock), Some(h)) = (role, swap.and_then(|s| s.lock_height)) {
-                standing.status = Status::Confirmed(f.outlook.map(|o| o.tip.saturating_sub(h).saturating_add(1)));
+            // no depth, whatever the tip: a count of confirmations is an explorer's to give, and none gave this one
+            if let (Some(Role::UserLock), Some(_)) = (role, swap.and_then(|s| s.lock_height)) {
+                standing.status = Status::Confirmed(None);
             }
             by_record = standing.rate_milli.is_some() || standing.at.is_some() || standing.status != Status::Unknown;
         }

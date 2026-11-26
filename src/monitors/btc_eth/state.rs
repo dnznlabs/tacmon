@@ -90,8 +90,9 @@ pub struct State {
     pub log: VecDeque<LogLine>,
     pub swaps: Vec<Swap>,
     pub swaps_ok: bool,
-    /// The quotes the provider keeps, as last counted. `None`: never counted.
+    /// The quotes the provider keeps, as last counted, and whether the last count answered. `None`: never counted.
     pub quotes: Option<Quotes>,
+    pub quotes_ok: bool,
     /// The ads for the pair this provider serves. The board carries every pair: the rest are counted in
     /// `other_ads` and never drawn as this market.
     pub ads: Vec<Ad>,
@@ -181,6 +182,7 @@ impl State {
             swaps: Vec::new(),
             swaps_ok: false,
             quotes: None,
+            quotes_ok: false,
             ads: Vec::new(),
             other_ads: 0,
             all_ads: Vec::new(),
@@ -272,8 +274,11 @@ impl State {
                 }
             }
             Event::Eth(e) => self.eth = e,
-            // a failed count keeps the last one: the records light already says the directory is not read
-            Event::Quotes(q) => self.quotes = q.or(self.quotes),
+            // a failed count keeps the last one, marked: the quote directories can fail to read while the records do not
+            Event::Quotes(q) => {
+                self.quotes_ok = q.is_some();
+                self.quotes = q.or(self.quotes);
+            }
             Event::MainTxs(t) => {
                 self.main_txs_ok = t.is_some();
                 if t.is_some() {
@@ -376,11 +381,14 @@ impl State {
             Direction::Forward => self.terms.as_ref()?,
             Direction::Reverse => self.reverse_terms()?,
         };
-        let mine = self.my_ad();
+        // nothing posted under the provider's own key is a rival: right after a change of terms its own ad still
+        // carries the old ones, and would be read as another provider. An ad under its key that is not its own is
+        // the header's to call out, not a fee to be measured against.
+        let own_key = &self.id.claim_pub;
         let named: Vec<(String, &Terms)> = self
             .ads
             .iter()
-            .filter(|a| !mine.is_some_and(|m| std::ptr::eq(m, *a)))
+            .filter(|a| own_key.is_empty() || a.claim_pub != *own_key)
             .filter_map(|a| {
                 let terms = if d == Direction::Forward { Some(&a.terms) } else { a.reverse_terms.as_ref() };
                 Some((shown_name(a), terms?))
@@ -419,7 +427,6 @@ impl State {
             gas: self.eth,
             priced: self.priced,
             on_board: self.on_board(),
-            quotes: self.quotes,
             stuck: &stuck,
             lost: &lost,
             explorer: self.explorer,
@@ -912,5 +919,22 @@ mod tests {
 
         assert_eq!(st.rank_sizes(), [20_000, 97_758]);
         assert_eq!((st.fee_rank(20_000), st.fee_rank(97_758), st.fee_rank(10_000)), (Some((2, 2)), Some((1, 2)), None));
+    }
+
+    #[test]
+    fn the_providers_own_ad_with_its_old_terms_is_not_a_rival_and_a_failed_count_of_quotes_is_marked() {
+        let mut st = state();
+        let ad = |key: &str, bps| Ad { name: key.into(), claim_pub: key.into(), terms: terms(bps), reverse: false, reverse_terms: None };
+        st.apply(signal(Signal::Started(Identity { claim_pub: "02me".into(), ..Default::default() }), None));
+        // the provider now charges 0.30%; the board still carries its ad at 0.10%
+        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: None }))));
+
+        st.apply(Event::Ads(Some(vec![ad("02me", 10), ad("03aa", 90)])));
+        st.apply(Event::Quotes(Some(Quotes { count: 2, last: Some(5) })));
+        st.apply(Event::Quotes(None));
+
+        let low = st.advice(Direction::Forward).expect("advice").low;
+        assert!(matches!(low.standing, advisor::Standing::Cheapest { ref name, .. } if name == "03aa"), "{low:?}");
+        assert_eq!((st.quotes, st.quotes_ok), (Some(Quotes { count: 2, last: Some(5) }), false));
     }
 }

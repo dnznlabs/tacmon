@@ -74,9 +74,10 @@ The header has a line for each direction, one for swaps and money, the status li
 - **fee**: where its BTC→ETH fee stands among the board's providers that would take a swap now, at the least
   and the most it takes itself: `cheapest of 2 at 25,000`. The app takes the quote that pays the most, so this
   is whether it is picked.
-- **last quote**: how long ago the provider last gave a quote, by the newest file in its quote directories.
-  A provider that is on the board and has given none is one the app cannot reach or does not pick: `none given`,
-  in yellow.
+- **last quote kept**: when the newest file in the provider's quote directories was written. It is not the last
+  quote given: a BTC→ETH quote is written only once a user holds or locks for it, and removed again when the hold
+  lapses with no lock, while an ETH→BTC quote is written when given. `none` says only that no file is kept now, not
+  that the provider is not asked. The provider writes nowhere how many quotes it has given.
 - **lights**: health, on the board, records read, and price. A transaction of the provider's own that is stuck
   is named beside them, in red. The price light is the log's word: red after the
   provider says it has no price (it then quotes nothing), hollow when the log this run has read does not say.
@@ -165,7 +166,7 @@ tacmon runs none of them. The commands are:
 
 ```bash
 node fastbridge-lp/setup.mjs status --data <data_dir> --port <port>     # Tacit's own check of health, terms and ad (reads only)
-sudo systemctl stop <unit> && node fastbridge-lp/setup.mjs --data <data_dir> --port <port> --no-start && sudo systemctl start <unit>
+sudo systemctl stop <unit> && { node fastbridge-lp/setup.mjs --data <data_dir> --port <port> --no-start; sudo systemctl start <unit>; }
 ${EDITOR:-nano} <data_dir>/config.json && sudo systemctl restart <unit>  # change the fee or the sizes
 DATA_DIR=<data_dir> make backup DEST=<another disk>                      # from the tacmon checkout
 ```
@@ -173,7 +174,7 @@ DATA_DIR=<data_dir> make backup DEST=<another disk>                      # from 
 The first two run from a tacit checkout, as the user the provider runs as: setup reads the key file itself.
 Running setup again is Tacit's way to shield ETH that has arrived at the pool account, or to turn ETH→BTC on once
 Bitcoin has confirmed at the reverse address. Under each address the page says what it holds, confirmed and not yet, by the explorer's list of its coins (`btc_explorer`; without one it is a dash). While that side is off the provider's log does not name the address: set `btc_eth.reverse_address` (setup prints it) and the step names it. It writes the limits in `config.json` afresh from what is funded, so
-a size set by hand is set again; the fee is kept.
+a size set by hand is set again; the fee is kept. The provider is started again whatever setup says, so a setup that fails or is interrupted does not leave it stopped, and the step to turn ETH→BTC on prints no command while a swap is under way.
 
 `<data_dir>` is `btc_eth.data_dir`, `<unit>` is what `-u` names in `btc_eth.log_cmd`, and `<port>` is the one in
 `btc_eth.lp_url`. With a log command that names no unit, the `systemctl` parts are left out. Nothing read from the

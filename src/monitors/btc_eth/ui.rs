@@ -210,10 +210,17 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
                 .collect();
             if ranks.is_empty() || !st.ads_ok { vec![] } else { vec![label("fee "), Span::raw(ranks.join(" · "))] }
         },
-        // on the board and never asked is a provider the app cannot reach, or does not pick: said, where the lights are all green
+        // the newest quote the provider keeps a file of: one a user held or locked for, or an ETH→BTC one given. Not
+        // the last quote given, which the provider writes nowhere: none kept says nothing of whether it is asked
         match st.quotes {
-            Some(Quotes { last: Some(at), .. }) => vec![label("last quote "), Span::raw(format!("{} ago", dur(st.now.saturating_sub(at))))],
-            Some(_) => vec![label("last quote "), Span::styled("none given", if st.on_board() == Some(true) { Style::new().fg(th.warn) } else { th.dim() })],
+            Some(q) => vec![
+                label("last quote kept "),
+                match q.last {
+                    Some(at) => Span::raw(format!("{} ago", dur(st.now.saturating_sub(at)))),
+                    None => Span::styled("none", th.dim()),
+                },
+                if st.quotes_ok { Span::raw("") } else { bad(" (not read: last known)") },
+            ],
             None => vec![],
         },
         vec![light(Some(st.swaps_ok), th), label(" records")],
@@ -1034,10 +1041,10 @@ fn transactions(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
             let status = match (s.status, s.stuck) {
                 (Status::Unconfirmed, true) => Cell::from("▲ unconfirmed · stuck").style(Style::new().fg(th.bad).add_modifier(Modifier::BOLD)),
                 (Status::Unconfirmed, false) => Cell::from("unconfirmed").style(Style::new().fg(th.warn)),
+                // the provider saw it in a block: its record's word, which carries no count of confirmations
+                (Status::Confirmed(_), _) if r.by_record => Cell::from("● in a block").style(Style::new().fg(th.good)),
                 (Status::Confirmed(Some(n)), _) if n >= settled => Cell::from(format!("● confirmed · {settled}+")).style(Style::new().fg(th.good)),
                 (Status::Confirmed(Some(n)), _) => Cell::from(format!("● confirmed · {n}")).style(Style::new().fg(th.good)),
-                // the provider saw it in a block, and no explorer says how deep it is now
-                (Status::Confirmed(None), _) if r.by_record => Cell::from("● in a block").style(Style::new().fg(th.good)),
                 (Status::Confirmed(None), _) => Cell::from("● confirmed").style(Style::new().fg(th.good)),
                 (Status::Missing, _) => Cell::from("✕ not found").style(Style::new().fg(th.warn)),
                 // what the provider wrote of its own transaction is that it sent it: whether it confirmed is the chain's to say
@@ -1311,7 +1318,9 @@ mod tests {
 
         let (head, page) = (text(&header_lines(&st, &theme(), 200)), drawn(&st, Page::Transactions));
         let row = |what: &str| page.lines().find(|l| l.contains(what)).unwrap_or_default().to_string();
-        assert!(!unasked.contains("last quote") && never.contains("last quote none given") && head.contains("last quote 5m00s ago"), "{head}");
+        assert!(!unasked.contains("last quote") && never.contains("last quote kept none") && !never.contains("not read"), "{never}");
+        // the count that failed keeps the last figure, and says it is the last known
+        assert!(head.contains("last quote kept 5m00s ago (not read: last known)"), "{head}");
         assert!(row("take").contains("sent · status unknown") && row("take").contains("5.05") && row("take").contains("sent 1m00s · bumped 2"), "{page}");
         assert!(row("user's lock").contains("● in a block"), "{page}");
     }
@@ -1406,6 +1415,28 @@ mod tests {
         let picked = page.lines().find(|l| l.contains('▶')).unwrap_or_default().to_string();
         assert!(picked.contains("sudo systemctl stop tacit-fastbridge-lp-btc && \\"), "{page}");
         assert_eq!(st.picked(), Some(1));
-        assert!(st.copy.as_deref().is_some_and(|c| c.lines().count() == 3 && c.ends_with("sudo systemctl start tacit-fastbridge-lp-btc")), "{:?}", st.copy);
+        assert!(st.copy.as_deref().is_some_and(|c| c.lines().count() == 3 && c.ends_with("sudo systemctl start tacit-fastbridge-lp-btc; }")), "{:?}", st.copy);
+    }
+
+    #[test]
+    fn a_users_lock_known_by_the_record_alone_is_in_a_block_and_never_a_count_of_confirmations() {
+        let id = |c: char| c.to_string().repeat(64);
+        // an explorer is set and knows the tip, and has not been asked about this lock yet
+        let mut st = State::new(&BtcEthConfig::default(), false, true, false);
+        let swap = Swap {
+            id: "aaaa1".into(),
+            phase: "locked".into(),
+            sats: 25_000,
+            linked: vec![(Role::UserLock, id('a'))],
+            lock_height: Some(100),
+            ..Default::default()
+        };
+        st.apply(Event::Outlook(Some(Outlook { tip: 200, hour_milli: 1_000 })));
+
+        st.apply(Event::Swaps(Some(vec![swap])));
+
+        let page = drawn(&st, Page::Transactions);
+        let row = page.lines().find(|l| l.contains("user's lock")).unwrap_or_default().to_string();
+        assert!(row.contains("● in a block") && !row.contains("confirmed"), "{page}");
     }
 }
