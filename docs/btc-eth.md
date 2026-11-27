@@ -158,7 +158,8 @@ Ads are unsigned: anyone can post one. A rival named here is worth a look on the
 The provider looks after most of itself: it merges its notes, moves take coins to its reverse address, and replaces
 a slow take or lock. The Maintenance page lists each direction's state, then what is left for a hand, most urgent
 first: a provider that does not answer or has no price, a swap that ended with nothing received, a stuck
-transaction, a side that can take less than its min, gas ETH running low, an ad that is not on the board. A step
+transaction, a side that can take less than its min, ETH that has arrived at the pool account and is not shielded,
+gas ETH running low, an ad that is not on the board. A step
 that a command helps with has it printed underneath. `↑` and `↓` scroll; `shift+↑` and `shift+↓` (or `K` and `J`)
 pick a command, and `c` (or Enter) copies it through the terminal's clipboard (OSC 52).
 
@@ -166,15 +167,29 @@ tacmon runs none of them. The commands are:
 
 ```bash
 node fastbridge-lp/setup.mjs status --data <data_dir> --port <port>     # Tacit's own check of health, terms and ad (reads only)
+FB_LP_KEY=$(cat <data_dir>/provider.key) node tools/fastbridge-lp-shield.mjs <ETH> --eth   # shield ETH at the pool account: a dry run without --send
 sudo systemctl stop <unit> && { node fastbridge-lp/setup.mjs --data <data_dir> --port <port> --no-start; sudo systemctl start <unit>; }
 ${EDITOR:-nano} <data_dir>/config.json && sudo systemctl restart <unit>  # change the fee or the sizes
 DATA_DIR=<data_dir> make backup DEST=<another disk>                      # from the tacmon checkout
 ```
 
-The first two run from a tacit checkout, as the user the provider runs as: setup reads the key file itself.
-Running setup again is Tacit's way to shield ETH that has arrived at the pool account, or to turn ETH→BTC on once
-Bitcoin has confirmed at the reverse address. Under each address the page says what it holds, confirmed and not yet, by the explorer's list of its coins (`btc_explorer`; without one it is a dash). While that side is off the provider's log does not name the address: set `btc_eth.reverse_address` (setup prints it) and the step names it. It writes the limits in `config.json` afresh from what is funded, so
-a size set by hand is set again; the fee is kept. The provider is started again whatever setup says, so a setup that fails or is interrupted does not leave it stopped, and the step to turn ETH→BTC on prints no command while a swap is under way.
+The first three run from a tacit checkout, as the user the provider runs as. Setup reads the key file itself; the
+shield tool takes the key in its environment, which the operator's shell fills from the key file. tacmon reads
+neither.
+
+ETH sent to the pool account is not lent until it is shielded into the pool, and the running provider shields
+none. With `eth_rpc` set, the page says when the account holds more than the 0.01 ETH kept for gas and prints the
+shield tool's dry run for the rest. Setup does not do this for a provider that is already funded: it shields only
+while the provider holds less than two swaps of its min. After a shield, raise `quote.maxAmount` by hand.
+
+Running setup again is Tacit's way to turn ETH→BTC on once Bitcoin has confirmed at the reverse address. It writes
+the limits in `config.json` afresh from what is funded, so a size set by hand is set again; the fee is kept. The
+provider is started again whatever setup says, so a setup that fails or is interrupted does not leave it stopped,
+and the step prints no command while a swap is under way.
+
+Under each address the page says what it holds, confirmed and not yet, by the explorer's list of its coins
+(`btc_explorer`; without one it is a dash). While the reverse side is off the provider's log does not name its
+address: set `btc_eth.reverse_address` (setup prints it) and the step names it.
 
 `<data_dir>` is `btc_eth.data_dir`, `<unit>` is what `-u` names in `btc_eth.log_cmd`, and `<port>` is the one in
 `btc_eth.lp_url`. With a log command that names no unit, the `systemctl` parts are left out. Nothing read from the

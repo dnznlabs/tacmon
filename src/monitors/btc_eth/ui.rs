@@ -1393,7 +1393,8 @@ mod tests {
         st.apply(Event::Info(Some(Box::new(Info { terms, books: None }))));
         st.apply(Event::Health(Some(Health { ok: true, error: String::new() })));
         st.apply(Event::Reverse(Some(ReverseSide::Off)));
-        st.apply(Event::Eth(Some(0.0004)));
+        // ETH that has arrived at the account and is not shielded: the first command is the shield tool's dry run
+        st.apply(Event::Eth(Some(0.06)));
         // an address nobody has named has nothing read at it; one the config names is read before the side is on
         let unnamed = drawn(&st, Page::Maintenance);
         st.reverse_address = "bc1qrev".into();
@@ -1406,7 +1407,12 @@ mod tests {
         st.on_key(Page::Maintenance, ratatui::crossterm::event::KeyEvent::from(ratatui::crossterm::event::KeyCode::Char('c')));
 
         let page = drawn(&st, Page::Maintenance);
-        assert!(page.contains("can take 9,000 sats now · takes 25,000 to 97,758 · fee 0.20% + 399") && page.contains("gas ETH 0.0004"), "{page}");
+        assert!(
+            page.contains("can take 9,000 sats now · takes 25,000 to 97,758 · fee 0.20% + 399")
+                && page.contains("gas ETH 0.0600")
+                && page.contains("node tools/fastbridge-lp-shield.mjs 0.0500 --eth"),
+            "{page}"
+        );
         assert!(page.contains("▲ It can take 9,000 sats now, under its min of 25,000") && page.contains("status off"), "{page}");
         assert!(unnamed.contains("at the address — · the address is not known") && unread.contains("at the address — · not read yet"), "{unread}");
         assert!(page.contains("at the address 100,000 sats confirmed · 2 coins · 40,000 sats not yet confirmed · NOT ANSWERING: last known"), "{page}");

@@ -1,7 +1,7 @@
 //! What keeping a provider of Bitcoin for ETH running takes now, and the commands that do it. Arithmetic only: no
 //! state, no I/O.
 //!
-//! tacmon only prints the commands. They are Tacit's own setup tool, systemd, an editor and this checkout's backup,
+//! tacmon only prints the commands. They are Tacit's own setup and shield tools, systemd, an editor and this checkout's backup,
 //! and the only values put in one come from the operator's own configuration: where the provider's data is, the
 //! unit it runs as and the port it answers on. Nothing read from the provider, the board or a chain is put in one.
 
@@ -15,6 +15,12 @@ use crate::fmt::{dur, short};
 pub const SETUP: &str = "node fastbridge-lp/setup.mjs";
 /// Under this much ETH of its own, the pool account cannot pay for many of the settles it sends itself.
 pub const LOW_GAS_ETH: f64 = 0.002;
+/// What Tacit's tools leave at the pool account for gas, and the least over it worth shielding: under that, the
+/// deposit's own gas is a fair share of it.
+pub const GAS_KEPT_ETH: f64 = 0.01;
+pub const WORTH_SHIELDING_ETH: f64 = 0.005;
+/// Tacit's tool that puts ETH of the pool account into the pool. Without `--send` it only checks.
+pub const SHIELD: &str = "node tools/fastbridge-lp-shield.mjs";
 /// The least a provider of the pair may set as its smallest swap: under it a take at a busy fee would leave dust.
 pub const FLOOR_SATS: u128 = 20_000;
 
@@ -68,6 +74,12 @@ impl Place {
             }
             None => vec![format!("{} --no-start", self.setup(""))],
         }
+    }
+    /// The shield tool's dry run for `amount` ETH (`<ETH>` where it is not known). The tool takes the key in its
+    /// environment: the operator's shell reads it from the key file setup made, and tacmon never does.
+    fn shield(&self, amount: Option<&str>) -> Vec<String> {
+        let key = arg(&format!("{}/provider.key", self.data_dir.trim_end_matches('/')));
+        vec![format!("FB_LP_KEY=$(cat {key})"), format!("  {SHIELD} {} --eth", amount.unwrap_or("<ETH>"))]
     }
     fn edit(&self) -> Vec<String> {
         let edit = format!("${{EDITOR:-nano}} {}", arg(&format!("{}/config.json", self.data_dir.trim_end_matches('/'))));
@@ -207,15 +219,31 @@ pub fn upkeep(f: &Facts) -> Vec<Step> {
             None => step(
                 Level::Warn,
                 format!(
-                    "It can take {} sats now, under its min of {}, so the app lists it as full. Send ETH (Ethereum mainnet) to {account}. Once it has arrived, \
-                     Tacit's setup shields it and writes the limits afresh, with the provider stopped and started again whatever setup says (from a tacit checkout, \
-                     as the provider's user; a size set by hand in config.json is set again):",
+                    "It can take {} sats now, under its min of {}, so the app lists it as full. Send ETH (Ethereum mainnet) to {account}: once it has arrived, \
+                     a step here says how to shield it.",
                     sats(a),
                     sats(t.min)
                 ),
-                f.place.again(),
+                vec![],
             ),
         });
+    }
+
+    // ETH at the account is not lent: only what is shielded into the pool is, and the running provider shields none
+    if let Some(over) = f.gas.map(|g| g - GAS_KEPT_ETH).filter(|over| *over >= WORTH_SHIELDING_ETH) {
+        // cut to four places, never rounded up: the tool refuses more than the account can spare
+        // (the sliver added is far under a place: it only undoes what a binary fraction lost of a round figure)
+        let amount = format!("{:.4}", (over * 10_000.0 + 1e-6).floor() / 10_000.0);
+        steps.push(step(
+            Level::Warn,
+            format!(
+                "Its pool account holds {:.4} ETH of its own, {amount} over the {GAS_KEPT_ETH} kept for gas. ETH sent there is not lent until it is shielded \
+                 into the pool, and the running provider does not do that. Tacit's shield tool does (from a tacit checkout, as the provider's user, while no \
+                 swap is under way). This is its dry run: it checks and sends nothing; add --send to send it. Then raise `quote.maxAmount` (below).",
+                over + GAS_KEPT_ETH
+            ),
+            f.place.shield(Some(&amount)),
+        ));
     }
 
     if let Some(g) = f.gas.filter(|g| *g < LOW_GAS_ETH) {
@@ -415,14 +443,8 @@ mod tests {
 
         let step = said(&empty, "lists it as full").expect("a step");
         assert!(step.level == Level::Warn && step.text.contains("9,000 sats now, under its min of 25,000") && step.text.contains("0xpool"), "{}", step.text);
-        assert_eq!(
-            step.cmd,
-            [
-                "sudo systemctl stop lp-btc &&",
-                "  { node fastbridge-lp/setup.mjs --data /var/lib/lp-btc --port 8788 --no-start;",
-                "  sudo systemctl start lp-btc; }"
-            ]
-        );
+        // setup shields nothing for a provider already over two swaps of its min: no command is offered until ETH is there
+        assert!(step.cmd.is_empty());
         let step = said(&lent, "lists it as full").expect("a step");
         assert!(step.level == Level::Info && step.cmd.is_empty() && step.text.contains("1 swap under way holds 0.00878 ETH"), "{}", step.text);
     }
@@ -506,5 +528,31 @@ mod tests {
 
         assert!(said(&uncounted, "no count of its ETH notes while it holds 0.06095 ETH").is_some_and(|s| s.cmd.is_empty()));
         assert!(said(&split, "One swap can draw 0.07000 of the 0.09000 ETH in its 20 notes").is_some_and(|s| s.cmd.is_empty()));
+    }
+
+    #[test]
+    fn eth_sitting_at_the_pool_account_is_named_with_the_shield_tools_dry_run_and_gas_alone_is_not() {
+        let p = place();
+
+        let (arrived, gas_only, unread) =
+            (upkeep(&Facts { gas: Some(0.059997), ..facts(&p) }), upkeep(&Facts { gas: Some(0.0139), ..facts(&p) }), upkeep(&Facts { gas: None, ..facts(&p) }));
+
+        let step = said(&arrived, "is not lent until it is shielded").expect("a step");
+        // 0.049997 over the 0.01 kept: cut to four places, not rounded up to more than is there
+        assert!(step.level == Level::Warn && step.text.contains("holds 0.0600 ETH of its own, 0.0499 over"), "{}", step.text);
+        assert_eq!(step.cmd, ["FB_LP_KEY=$(cat /var/lib/lp-btc/provider.key)", "  node tools/fastbridge-lp-shield.mjs 0.0499 --eth"]);
+        assert!(said(&gas_only, "is not lent").is_none() && said(&unread, "is not lent").is_none());
+    }
+
+    #[test]
+    fn the_setup_chain_starts_the_provider_whatever_setup_says() {
+        assert_eq!(
+            place().again(),
+            [
+                "sudo systemctl stop lp-btc &&",
+                "  { node fastbridge-lp/setup.mjs --data /var/lib/lp-btc --port 8788 --no-start;",
+                "  sudo systemctl start lp-btc; }"
+            ]
+        );
     }
 }

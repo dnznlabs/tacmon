@@ -39,7 +39,7 @@ one it gave no answer for, ten minutes later.
 
 The `btc-eth` monitor watches a provider whose key Tacit's setup keeps in a file in its data directory
 (`provider.key`). tacmon opens the records in `swaps/` and `reverse/swaps/` under that directory, lists `quotes/` and `reverse/quotes/` for the names and times of their files without opening one, and touches no other path in it. That
-monitor starts no command but its `log_cmd`. The commands its Maintenance page prints (Tacit's setup tool, `systemctl`, an editor, this checkout's backup) are printed and copied, never run; the setup tool reads the key itself, in the operator's own shell. Where its own `btc_explorer` is set it asks that explorer for the
+monitor starts no command but its `log_cmd`. The commands its Maintenance page prints (Tacit's setup and shield tools, `systemctl`, an editor, this checkout's backup) are printed and copied, never run. The setup tool reads the key itself, and the shield command has the operator's own shell read the key file into that tool's environment: the command names the file's path, and tacmon never opens it. Where its own `btc_explorer` is set it asks that explorer for the
 latest transactions and the unspent coins at the provider's two addresses, for its recent swaps' transactions by
 id, and for the going fee rate; it does not ask whether an output is spent.
 
