@@ -50,9 +50,6 @@ impl Monitor for FastBridge {
     fn id(&self) -> &'static str {
         "fast-bridge"
     }
-    fn title(&self) -> &'static str {
-        "Fast bridge"
-    }
     fn subject(&self) -> String {
         self.state.name()
     }

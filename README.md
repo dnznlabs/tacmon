@@ -6,7 +6,7 @@ by **Ðenizen.** // dxnzn.wei
 
 `tacmon` is for operators: it watches the services **you run** for [Tacit](https://tacit.finance), on the machine you run them on, in the spirit of `htop` and `k9s`. It is not a way to watch Tacit in general: without a service of your own beside it, it has nothing to show. See [Who It Is For](#who-it-is-for).
 
-It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there is one monitor, `fast-bridge`, for a fast bridge liquidity provider. It is read only: it never sees a service's key and never changes a service. Where keeping a service stocked needs the key, it prints the command and a separate helper runs it ([Maintenance](docs/fast-bridge.md#maintenance)).
+It is built in two levels: a **monitor** per kind of service, and each monitor's **pages**. Today there are two: `fast-bridge`, for a fast bridge liquidity provider, and `btc-eth`, for a provider of Bitcoin for ETH. Each is read only: it never sees a service's key and never changes a service. Where keeping a service stocked needs the key, it prints the command and a separate tool runs it ([fast bridge](docs/fast-bridge.md#maintenance), [BTC-ETH](docs/btc-eth.md#maintenance)).
 
 ![tacmon running on its demo data: the start screen, then each page of the fast bridge monitor](docs/demo/demo.gif)
 
@@ -29,9 +29,9 @@ Every monitor is **off until you turn it on** in the configuration, because each
 
 | STATUS | VERSION | MONITORS |
 |:---|:---|:---|
-| `pre-mvp` | `0.1.0-alpha` | `fast-bridge` |
+| `pre-mvp` | `0.1.0-alpha` | `fast-bridge`, `btc-eth` |
 
-This is pre-release software. The pages have been checked against one live provider and against made-up data (`--demo`); the interactive screen has had little use beyond that.
+This is pre-release software. The fast bridge pages have been checked against one live provider and against made-up data (`--demo`); the interactive screen has had little use beyond that. The `btc-eth` monitor is newer still: it has been checked against made-up data and a provider that had not yet taken a swap.
 
 **Alpha software is alpha, act accordingly.** See [Disclaimer](#disclaimer).
 
@@ -61,6 +61,24 @@ The Maintenance page prints the commands that keep the two directions stocked; `
 
 **[The fast bridge monitor](docs/fast-bridge.md)** has the rest: what it assumes and how to point it at a provider run another way, every page, the settings, stuck and silent transactions, the Maintenance commands, and running the provider as a service.
 
+### BTC-ETH
+
+For one provider of Bitcoin for ETH (a fast bridge provider in pair mode), in both directions: a user's sats for pool ETH, and pool ETH for sats. It reads the provider's log, its local API, its swap records and the public board.
+
+Turn it on with `enabled = true` under `[btc_eth]`. It expects a provider made with Tacit's `setup.mjs` and kept running as a systemd unit named `tacit-fastbridge-lp-btc`, with its API on `127.0.0.1:8788` and its data in `/var/lib/tacit-fastbridge-lp-btc`.
+
+| KEY | PAGE | SHOWS |
+|:---|:---|:---|
+| `1` | Overview | open and finished swaps of both directions (way, phase, sats, ETH, the rate each trades at, the fee counted for it, deadline), latest warnings |
+| `2` | Log | the provider's log as a feed; `w` for warnings only |
+| `3` | Books | the provider's own accounting: fees, costs, losses and net, its ETH notes and sats, the target, the lean and buybacks |
+| `4` | Market | every provider of the pair on the board, cheapest first; `d` switches direction |
+| `5` | Advisor | where its fee stands at the smallest and the largest swap it takes, what a swap costs it by its books, and from what size its fee covers that |
+| `6` | Maint | both directions' state, what is short, and the commands that fix it; `c` copies the picked one |
+| `7` | Tx | the Bitcoin transactions of its swaps and, with an explorer set, of its addresses: status, fee rate, and which are stuck; its pool locks on Ethereum where an RPC and the pool contract are set |
+
+**[The BTC-ETH monitor](docs/btc-eth.md)** has the rest: what it assumes, the two units, the header, every page, the Maintenance commands, the settings, and what it does not show yet.
+
 ## Usage
 
 There are no packaged releases yet. Build it with a Rust toolchain: `make build` leaves the binary at `target/release/tacmon`.
@@ -75,7 +93,22 @@ tacmon --print-config         # The effective configuration, as TOML
 
 ### Configuration
 
-`~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.toml`](config.example.toml) is the defaults. `[theme]` belongs to the tool, and each monitor has a section of its own (`[fast_bridge]`).
+`~/.config/tacmon/config.toml`, or `--config FILE`. [`config.example.toml`](config.example.toml) is the defaults. `[theme]` belongs to the tool, and each monitor has a section of its own (`[fast_bridge]`, `[btc_eth]`).
+
+`[shared]` holds the outside services both monitors can use, so they are written once: `eth_rpc`, `pool_contract`, `eth_explorer` and `btc_explorer`. A monitor uses a shared one wherever its own setting of that name is empty, and its own wins where it is set. Setting one under `[shared]` turns that read on for every enabled monitor, and each sends it what its guide says.
+
+```toml
+[shared]
+btc_explorer = "https://blockstream.info/api"
+eth_explorer = "https://etherscan.io"
+
+[fast_bridge]
+enabled = true
+
+[btc_eth]
+enabled = true
+btc_explorer = "https://mempool.space/api"   # this monitor's own wins
+```
 
 Every monitor is off by default, so the file needs at least the line that turns one on:
 
@@ -91,7 +124,7 @@ enabled = true
 
 With no monitor on, `tacmon` starts nothing and reads nothing: it prints where the configuration is or goes and the line for each monitor, and exits with status 2. With more than one on, `m` switches between them.
 
-Nothing leaves the machine that you did not configure. The settings that ask an outside service for something (an Ethereum RPC, a Bitcoin explorer) or run a command with the provider's key are empty by default, and [the monitor's guide](docs/fast-bridge.md#settings) says what each one sends.
+Nothing leaves the machine that you did not configure. The settings that ask an outside service for something (an Ethereum RPC, a Bitcoin explorer) or run a command with the provider's key are empty by default, and each monitor's guide ([fast bridge](docs/fast-bridge.md#settings), [BTC-ETH](docs/btc-eth.md#settings)) says what each one sends.
 
 ## Security
 
@@ -108,6 +141,7 @@ tacmon is read only: the binary never sees a key, signs nothing and writes nothi
 | [Working Conventions](AGENTS.md) | Repo structure, commands, conventions and gotchas for contributors, human or agent |
 | [Example Configuration](config.example.toml) | Every setting, at its default |
 | [The Fast Bridge Monitor](docs/fast-bridge.md) | What it reads and assumes, its pages and settings, transactions, Maintenance, running the provider as a service, and what of the Ethereum side can be shown |
+| [The BTC-ETH Monitor](docs/btc-eth.md) | What it reads and assumes, its units, pages and settings, and what it does not show yet |
 | [Security](SECURITY.md) | What tacmon is trusted with, the threat model, and the claims the reviews attack |
 | [Audits](audits/README.md) | How the self-review works, its limits, and every past review |
 

@@ -56,6 +56,8 @@ The header is on every page, one line per direction. Forward: TAC free / promise
 
 ## Settings
 
+`eth_rpc`, `pool_contract`, `eth_explorer` and `btc_explorer` can be set once under `[shared]` for every monitor instead: this monitor's own setting wins where it is not empty ([Configuration](../README.md#configuration)).
+
 `~/.config/tacmon/config.toml`, or `--config FILE`, under `[fast_bridge]`. [`config.example.toml`](../config.example.toml) is every setting at its default. `fast_bridge.enabled` is the one setting that must be there: it is `false` by default, and `true` turns the monitor on. The rest are optional. Each of these sends something somewhere, so each is empty until you set it. Two more run a command with the provider's key and are empty by default too: `status_cmd` ([Maintenance](#maintenance)) and `normalize_cmd` ([Silent sends](#silent-sends-to-the-reverse-side)).
 
 `fast_bridge.eth_rpc` is empty by default, so the pool account is sent to no RPC and its ETH balance is not shown. Set a URL to show it.

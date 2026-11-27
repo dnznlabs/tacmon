@@ -7,6 +7,12 @@ warn = "yellow"
 bad = "red"
 dim = "242"
 
+[shared]
+eth_rpc = ""
+pool_contract = ""
+eth_explorer = ""
+btc_explorer = ""
+
 [fast_bridge]
 enabled = false
 lp_url = "http://127.0.0.1:8787"
@@ -52,3 +58,44 @@ fee_ladder_bps = [
 ]
 deadline_warn_secs = 3600
 tx_stuck_secs = 1800
+
+[btc_eth]
+enabled = false
+lp_url = "http://127.0.0.1:8788"
+boards = ["https://tacit-fast-board.onrender.com"]
+data_dir = "/var/lib/tacit-fastbridge-lp-btc"
+log_cmd = [
+    "journalctl",
+    "-u",
+    "tacit-fastbridge-lp-btc",
+    "-o",
+    "cat",
+    "-f",
+    "-n",
+    "2000",
+]
+eth_rpc = ""
+pool_contract = ""
+eth_explorer = ""
+btc_explorer = ""
+pool_account = ""
+reverse_address = ""
+fee_ladder_bps = [
+    5,
+    10,
+    20,
+    30,
+    50,
+    100,
+    150,
+    200,
+]
+deadline_warn_secs = 3600
+tx_stuck_secs = 1800
+
+[btc_eth.refresh]
+lp_secs = 5
+board_secs = 20
+files_secs = 5
+eth_secs = 60
+chain_secs = 120

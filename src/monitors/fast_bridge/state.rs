@@ -999,7 +999,8 @@ mod tests {
 
         let cmds = st.commands();
 
-        assert_eq!(cmds[0], "sudoedit /etc/tacit-fastbridge-lp/env \\\nsudo systemctl restart tacit-fastbridge-lp");
+        // two commands, so the first line ends in `&&`: without it the second would paste as more files to edit
+        assert_eq!(cmds[0], "sudoedit /etc/tacit-fastbridge-lp/env && \\\n  sudo systemctl restart tacit-fastbridge-lp");
     }
 
     #[test]

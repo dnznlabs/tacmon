@@ -5,32 +5,25 @@ use super::{
     config::Refresh,
     ledger,
     model::{Ad, ChainTx, Coin, Health, LogEntry, Outlook, PoolScan, ReverseSide, ReverseStock, Signal, Swap, Terms, Want},
-    ports::{PoolLog, Ports, QUEUE, SilentCheck},
+    ports::{Ports, QUEUE, SilentCheck},
 };
-use crate::shell::monitor::Wake;
+use crate::{
+    monitors::common::{chain::Turns, feed::Out, pool::PoolReader},
+    shell::monitor::Wake,
+};
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
 
-/// The most transactions asked about by id in one round. The explorer is a shared public service, and a provider
-/// with a long history catches up over a few rounds.
-const MAX_LOOKUPS: usize = 12;
 /// The most transactions whose notes sent away are asked about in one round.
 const MAX_AWAY: usize = 6;
 /// How long before a transaction the key-holding tool could not judge is put to it again.
 const SILENT_RETRY: Duration = Duration::from_secs(600);
 
-/// The shortest reach back the first read of the pool's log is cut to when a node refuses a longer one. Free public
-/// nodes allow from 50 blocks to a day and a half.
-const MIN_REACH: u64 = 32;
-/// How many of the newest blocks are read again each round: one taken back by a reorganisation takes its locks with it.
-const REREAD: u64 = 12;
-/// The most locks kept. A day of the whole pool's is under a hundred.
-const MAX_POOL_LOCKS: usize = 4096;
 use tokio::{
     sync::{
-        mpsc::{Receiver, Sender, channel},
+        mpsc::{Receiver, channel},
         watch,
     },
     time::sleep,
@@ -74,60 +67,6 @@ pub enum Event {
     SilentRead(Option<String>),
     /// The pool's log on Ethereum as far as it has been read, whole each time.
     Pool(Option<PoolScan>),
-}
-
-/// What has been read of the pool's log, and where the next read starts.
-struct PoolReader {
-    scan: PoolScan,
-    /// The block to read from next. `None`: nothing read yet.
-    next: Option<u64>,
-    /// How far back a first read reaches: halved each time a node refuses it, and never by a request that got no answer.
-    reach: u64,
-}
-
-impl Default for PoolReader {
-    fn default() -> Self {
-        Self { scan: PoolScan::default(), next: None, reach: ledger::POOL_LOOKBACK }
-    }
-}
-
-impl PoolReader {
-    /// One round: the tip, then the log from where the last read ended. `None` when the node did not answer.
-    async fn read(&mut self, pool: &dyn PoolLog) -> Option<PoolScan> {
-        let tip = pool.tip().await.ok()?;
-        // never read, or away for longer than is kept: start over from the tip
-        let fresh = self.next.is_none_or(|n| tip.saturating_sub(n) > ledger::POOL_LOOKBACK);
-        let from = if fresh { tip.saturating_sub(self.reach) } else { self.next.unwrap_or(tip).saturating_sub(REREAD).max(self.scan.since).min(tip) };
-        let found = match pool.locks(from, tip).await {
-            Ok(Some(found)) => found,
-            // refused: a first read reaches half as far next time. One from where the last ended was refused for the
-            // blocks that have piled up since, and they only pile higher: it starts over, at a reach the node allowed
-            Ok(None) => {
-                if fresh {
-                    self.reach = (self.reach / 2).max(MIN_REACH);
-                }
-                self.next = None;
-                return None;
-            }
-            // no answer says nothing about what the node allows
-            Err(_) => return None,
-        };
-        let scan = &mut self.scan;
-        if fresh {
-            *scan = PoolScan { since: from, ..Default::default() };
-        }
-        scan.since = scan.since.max(tip.saturating_sub(ledger::POOL_LOOKBACK));
-        // what was read again replaces what was held for those blocks
-        scan.locks.retain(|l| l.block < from && l.block >= scan.since);
-        scan.locks.extend(found.into_iter().filter(|l| (from..=tip).contains(&l.block)));
-        if let Some(over) = scan.locks.len().checked_sub(MAX_POOL_LOCKS).filter(|n| *n > 0) {
-            scan.locks.drain(..over);
-            scan.since = scan.locks.first().map_or(tip, |l| l.block + 1);
-        }
-        scan.tip = tip;
-        self.next = Some(tip + 1);
-        Some(scan.clone())
-    }
 }
 
 /// Whose turn it is to be asked whether its note sent away has been spent: the one asked longest ago first, and one
@@ -200,23 +139,6 @@ async fn judge(silent: &dyn SilentCheck, ids: &[String], judged: &mut Judged) ->
         }
     }
     (verdicts, None)
-}
-
-#[derive(Clone)]
-struct Out {
-    tx: Sender<Event>,
-    wake: Wake,
-}
-
-impl Out {
-    /// `false` once the monitor has gone, which ends the task that asked. Waits while the queue is full.
-    async fn send(&self, ev: Event) -> bool {
-        // woken first as well: a reader waiting on a full queue needs the shell to come and empty it
-        self.wake.wake();
-        let ok = self.tx.send(ev).await.is_ok();
-        self.wake.wake();
-        ok
-    }
 }
 
 /// `pool_account` empty means: learn it from the log's start line. `reverse_address` is the configured one, until the
@@ -304,7 +226,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_addr
         let (o, every) = (out.clone(), Duration::from_secs(refresh.chain_secs.max(30)));
         tokio::spawn(async move {
             // ids answered as settled are not asked again; the rest take turns, the one asked longest ago first
-            let (mut settled, mut asked, mut round) = (HashSet::<String>::new(), HashMap::<String, u64>::new(), 0u64);
+            let (mut turns, mut round) = (Turns::default(), 0u64);
             let mut away = AwayTurns::default();
             loop {
                 round += 1;
@@ -368,24 +290,7 @@ pub fn start(ports: Ports, refresh: &Refresh, pool_account: String, reverse_addr
                         changed
                     });
                 }
-                settled.retain(|id| wanted.contains(id));
-                asked.retain(|id, _| wanted.contains(id));
-                let mut ask: Vec<String> = wanted.iter().filter(|id| !listed.contains(*id) && !settled.contains(*id)).cloned().collect();
-                ask.sort_by_key(|id| asked.get(id).copied().unwrap_or(0));
-                let (mut found, mut answered) = (Vec::new(), true);
-                for id in ask.into_iter().take(MAX_LOOKUPS) {
-                    match chain.tx(&id).await {
-                        Ok(tx) => {
-                            let deep = |t: &ChainTx| t.height.zip(outlook).is_some_and(|(h, o)| o.tip.saturating_sub(h).saturating_add(1) >= ledger::SETTLED);
-                            if tx.as_ref().is_some_and(deep) {
-                                settled.insert(id.clone());
-                            }
-                            found.push((id.clone(), tx));
-                        }
-                        Err(_) => answered = false,
-                    }
-                    asked.insert(id, round);
-                }
+                let (found, answered) = turns.ask(chain.as_ref(), &wanted, &listed, outlook).await;
                 if !o.send(Event::NotesAway(waiting)).await || !o.send(Event::Lookups { found, answered, wanted }).await {
                     return;
                 }
@@ -552,89 +457,6 @@ mod tests {
         }
 
         assert_eq!(wanted(&seen), [true; 19]);
-    }
-
-    /// A node that refuses a read of more than `most` blocks, does not answer while `down`, and notes every range it was asked for.
-    struct Narrow {
-        tip: std::sync::atomic::AtomicU64,
-        most: u64,
-        down: std::sync::atomic::AtomicBool,
-        asked: std::sync::Mutex<Vec<(u64, u64)>>,
-    }
-
-    fn narrow(tip: u64, most: u64) -> Narrow {
-        Narrow { tip: tip.into(), most, down: false.into(), asked: Default::default() }
-    }
-
-    impl PoolLog for Narrow {
-        fn tip(&self) -> Fut<'_, u64> {
-            Box::pin(async move { Ok(self.tip.load(std::sync::atomic::Ordering::Relaxed)) })
-        }
-        fn locks(&self, from: u64, to: u64) -> Fut<'_, Option<Vec<PoolLock>>> {
-            Box::pin(async move {
-                self.asked.lock().expect("the list").push((from, to));
-                anyhow::ensure!(!self.down.load(std::sync::atomic::Ordering::Relaxed), "no answer");
-                if to - from > self.most {
-                    return Ok(None);
-                }
-                // one lock in the range, and one outside it that an honest node would not send
-                Ok(Some(vec![
-                    PoolLock { leaf: "a".repeat(64), block: to, ..Default::default() },
-                    PoolLock { leaf: "b".repeat(64), block: from - 1, ..Default::default() },
-                ]))
-            })
-        }
-    }
-
-    async fn rounds(reader: &mut PoolReader, node: &Narrow, n: usize) -> Vec<Option<(u64, usize)>> {
-        let mut reads = Vec::new();
-        for _ in 0..n {
-            reads.push(reader.read(node).await.map(|p| (p.since, p.locks.len())));
-        }
-        reads
-    }
-
-    #[tokio::test]
-    async fn a_node_that_refuses_a_days_log_is_asked_for_half_as_much_each_round_and_then_only_for_the_newest_blocks() {
-        let node = narrow(100_000, 2_000);
-        let mut reader = PoolReader::default();
-
-        let reads = rounds(&mut reader, &node, 4).await;
-
-        // a day, half, a quarter (which the node allows), then the newest blocks again: the lock read twice is held once
-        assert_eq!(*node.asked.lock().expect("the list"), [(92_800, 100_000), (96_400, 100_000), (98_200, 100_000), (99_989, 100_000)]);
-        assert_eq!(reads, [None, None, Some((98_200, 1)), Some((98_200, 1))]);
-    }
-
-    #[tokio::test]
-    async fn after_a_gap_wider_than_the_node_allows_the_read_starts_over_and_does_not_ask_for_the_same_blocks_for_a_day() {
-        use std::sync::atomic::Ordering::Relaxed;
-        // allows 50 blocks: the first read gets down to a reach of 32
-        let node = narrow(100_000, 50);
-        let mut reader = PoolReader::default();
-        let _ = rounds(&mut reader, &node, 9).await;
-        node.asked.lock().expect("the list").clear();
-
-        // twenty minutes with the lid shut
-        node.tip.store(100_100, Relaxed);
-        let reads = rounds(&mut reader, &node, 3).await;
-
-        assert_eq!(*node.asked.lock().expect("the list"), [(99_989, 100_100), (100_068, 100_100), (100_089, 100_100)]);
-        assert_eq!(reads, [None, Some((100_068, 1)), Some((100_068, 1))]);
-    }
-
-    #[tokio::test]
-    async fn a_node_that_does_not_answer_costs_no_reach() {
-        use std::sync::atomic::Ordering::Relaxed;
-        let node = narrow(100_000, 10_000);
-        let mut reader = PoolReader::default();
-        node.down.store(true, Relaxed);
-        let failed = rounds(&mut reader, &node, 8).await;
-
-        node.down.store(false, Relaxed);
-        let reads = rounds(&mut reader, &node, 1).await;
-
-        assert_eq!((failed, reads), (vec![None; 8], vec![Some((92_800, 1))]));
     }
 
     /// A key-holding tool that gives no answer for the ids in `broken`.

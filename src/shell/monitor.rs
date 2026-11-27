@@ -31,10 +31,9 @@ impl Wake {
 }
 
 pub trait Monitor {
-    /// The name on the command line and in `--snapshot` ("fast-bridge").
+    /// The name on the command line, in `--snapshot`, on the monitor bar and in the frame ("fast-bridge").
     fn id(&self) -> &'static str;
-    fn title(&self) -> &'static str;
-    /// What this instance is watching (a provider's name), shown beside the title.
+    /// What this instance is watching (a provider's name), shown beside the name.
     fn subject(&self) -> String;
     fn pages(&self) -> &'static [&'static str];
     /// Other names `--snapshot` takes for a page, each with the page's place: a tab that was renamed keeps its old name here.

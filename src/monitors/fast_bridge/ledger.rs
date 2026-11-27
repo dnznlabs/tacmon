@@ -2,24 +2,11 @@
 //! Arithmetic only: no state, no I/O.
 
 use super::model::{ChainTx, Direction, Outlook, PoolLock, PoolScan, Role, Swap};
+pub use crate::monitors::common::chain::{MAX_SWAPS, SETTLED, Status};
+use crate::monitors::common::chain::{Standing, rank, standing};
+use crate::monitors::common::pool::BLOCK_SECS;
+pub use crate::monitors::common::pool::POOL_SETTLED;
 use std::collections::{HashMap, HashSet};
-
-/// How many swaps' transactions are followed: the open ones first, then the newest. It bounds what an explorer is asked.
-pub const MAX_SWAPS: usize = 50;
-/// Blocks after which a transaction is settled, and not asked about again.
-pub const SETTLED: u64 = 6;
-/// A fee rate under this share of the hour estimate is slow. Under it by anything is not: two explorers asked in
-/// the same minute give estimates several times apart.
-pub const SLOW_PERCENT: u64 = 80;
-/// How long a slow transaction is given before it is called stuck: about a block.
-pub const GRACE_SECS: u64 = 600;
-
-/// How far back the pool's log on Ethereum is read, in blocks: a day. A swap is open for hours.
-pub const POOL_LOOKBACK: u64 = 7_200;
-/// Blocks after which Ethereum does not take a transaction back: two epochs.
-pub const POOL_SETTLED: u64 = 64;
-/// Ethereum makes a block every twelve seconds, or skips one: never sooner.
-const BLOCK_SECS: u64 = 12;
 
 /// How many of the key's verdicts on notes sent away are kept, oldest out first. The feed and the state keep the
 /// same ones by this rule, so neither forgets a verdict the other still holds.
@@ -39,17 +26,6 @@ pub enum Place {
     Elsewhere,
     /// On Ethereum, in the pool contract.
     Pool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    /// Not asked about yet, or the explorer did not answer for it.
-    Unknown,
-    /// The explorer answers and does not know it: not broadcast yet, dropped, or replaced.
-    Missing,
-    Unconfirmed,
-    /// How many blocks deep. `None` while the tip is not known.
-    Confirmed(Option<u64>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,19 +142,8 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
     let row = |txid: &str, role: Option<Role>, swap: Option<&Swap>| {
         let at_address = listed.get(txid);
         let chain = at_address.map(|(_, tx, _)| tx).or_else(|| f.looked.get(txid).and_then(Option::as_ref));
-        let status = match chain {
-            Some(tx) => tx.height.map_or(Status::Unconfirmed, |h| Status::Confirmed(f.outlook.map(|o| o.tip.saturating_sub(h).saturating_add(1)))),
-            None if f.looked.contains_key(txid) => Status::Missing,
-            None => Status::Unknown,
-        };
-        let rate_milli = chain.and_then(ChainTx::rate_milli);
-        let at = match status {
-            Status::Unconfirmed => f.first_seen.get(txid).copied(),
-            _ => chain.and_then(|tx| tx.time),
-        };
-        let unconfirmed = status == Status::Unconfirmed;
-        let slow = unconfirmed && rate_milli.zip(f.outlook).is_some_and(|(rate, o)| rate.saturating_mul(100) < o.hour_milli.saturating_mul(SLOW_PERCENT));
-        let seen_for = |secs: u64| at.is_some_and(|t| f.now.saturating_sub(t) >= secs);
+        let Standing { status, rate_milli, at, slow, stuck } =
+            standing(chain, f.looked.contains_key(txid), f.outlook, f.first_seen.get(txid).copied(), f.now, f.stuck_secs);
         TxRow {
             txid: txid.to_string(),
             place: at_address.map_or(Place::Elsewhere, |(place, _, _)| *place),
@@ -192,7 +157,7 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
             rate_milli,
             at,
             slow,
-            stuck: unconfirmed && (seen_for(f.stuck_secs) || (slow && seen_for(GRACE_SECS))),
+            stuck,
             spends_reverse: at_address.is_some_and(|(_, _, spends)| *spends),
         }
     };
@@ -234,13 +199,7 @@ pub fn rows(f: &Facts) -> Vec<TxRow> {
             out.push((r.at.unwrap_or(f.now), r));
         }
     }
-    let rank = |r: &TxRow| match (r.status, r.stuck) {
-        (Status::Unconfirmed, true) => 0,
-        (Status::Unconfirmed, false) => 1,
-        (Status::Missing, _) => 2,
-        (Status::Unknown, _) => 3,
-        (Status::Confirmed(_), _) => 4,
-    };
+    let rank = |r: &TxRow| rank(&Standing { status: r.status, rate_milli: r.rate_milli, at: r.at, slow: r.slow, stuck: r.stuck });
     out.sort_by(|(a_at, a), (b_at, b)| rank(a).cmp(&rank(b)).then(b_at.cmp(a_at)));
     out.into_iter().map(|(_, r)| r).collect()
 }

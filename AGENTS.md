@@ -7,8 +7,8 @@
 ## Overview
 
 `tacmon` is a terminal activity monitor for operators of Tacit services, in the spirit of `htop` and `k9s`: it watches what the operator runs, on the machine it runs on, and is not a view of the network. Two levels: a
-**monitor** per kind of service, then that monitor's **pages**. One monitor exists, `fast-bridge`, for a fast bridge
-liquidity provider. Every monitor is read only: it never sees a service's key and never changes a service. What needs the key, it prints as a
+**monitor** per kind of service, then that monitor's **pages**. Two monitors exist: `fast-bridge`, for a fast bridge
+liquidity provider, and `btc-eth`, for the same daemon run as a provider of Bitcoin for ETH. Every monitor is read only: it never sees a service's key and never changes a service. What needs the key, it prints as a
 command for a helper in `scripts/helpers/`.
 
 ## Working Agreements
@@ -34,6 +34,8 @@ For anyone changing this repo, human or agent.
 | `src/shell/splash.rs` | the animated start screen: the Tacit mark in braille, drawn from the brand SVG's geometry |
 | `src/shell/widgets.rs` | drawing pieces monitors share, so pages look like one tool |
 | `src/monitors/mod.rs` | `create_monitors`: the one place that lists the monitors |
+| `src/monitors/common/` | what monitors of a provider share: bounded HTTP (`http`), the log follower and record reader (`local`), lenient JSON readers and the checks on what reaches a URL or a command (`wire`), fee arithmetic and what an explorer reports (`model`), `Fut`, `QUEUE` and the `Chain` port (`ports`), how a Bitcoin transaction stands and whose turn it is to be asked about (`chain`), the pool's lock log read a round at a time (`pool`), a reader's way to its state (`feed`) |
+| `src/monitors/btc_eth/` | the BTC-ETH monitor, in the same shape as `fast_bridge`: `model`, `ports`, `adapters/`, `feed`, `state`, `advisor`, `ledger`, `upkeep`, `ui` |
 | `src/monitors/fast_bridge/model.rs` | the domain: no I/O, no wire formats |
 | `src/monitors/fast_bridge/ports.rs` | one trait per outside capability |
 | `src/monitors/fast_bridge/adapters/` | `http`, `local`, `memory`; `wire.rs` reads the provider's JSON; `mod.rs` chooses |
@@ -71,14 +73,17 @@ For anyone changing this repo, human or agent.
 
 - **Ports and adapters, in Rust terms.** A port is a trait in the monitor's `ports.rs`. An adapter is a struct in `adapters/` built by a `create_*` function. Only `adapters/mod.rs` and `main.rs` name concrete adapters; `feed`, `state` and `ui` see ports and the model.
 - **The memory adapter is the contract.** Tests substitute it for the real ones. A new port gets its memory implementation in the same change.
-- **A new monitor** is a directory under `src/monitors/` with the same shape, a section in `Config`, a line in `create_monitors` and a row in `monitors::KNOWN`. Nothing in `src/shell/` changes.
+- **A new monitor** is a directory under `src/monitors/` with the same shape, a section in `Config`, a line in `create_monitors` and a row in `monitors::KNOWN`. Nothing in `src/shell/` changes for the monitor's sake: a change to the `Monitor` trait itself is a change to every monitor, made on its own grounds.
 - **Every monitor is off by default** (`enabled = false`): each needs something of the operator's to watch, and none reads anything before it is asked to. `--demo` runs them all. With none on, `main.rs` prints `setup_help` (where the configuration goes, the line for each monitor in `KNOWN`) and exits 2.
+- **What two monitors would each need a copy of lives in `src/monitors/common/`**, and only that: readers and their bounds, the checks on untrusted text, arithmetic that must not wrap. Nothing there knows a monitor's units, its model or its pages. A bound or a check is changed there once, never loosened in one monitor's adapter.
+- **A monitor names its units.** `fast_bridge` counts TAC base units; `btc_eth` counts sats on Bitcoin and pool ETH (1e-8 ETH), and never adds or subtracts one from the other: a fee across the two is the provider's own figure or a dash.
 - **Wire formats stay in `adapters/wire.rs`.** The provider's log messages and record fields are not a stable interface: read them leniently, and show what is not recognised as it is.
 - **A failed read is `None`, never a made-up zero.** The state keeps the last value and marks the source as not answering. A failed status, or an answer missing what it must carry, is a failed read.
-- **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee.
+- **The Advisor is about being chosen, not about earning the most.** It marks the fee that matches the cheapest other provider and names a fee the app would flag as high (`advisor::HIGH_FEE_BPS`, the app's `warnFeeBps`); it never recommends raising a fee. The `btc_eth` Advisor also says what a swap costs by the provider's books and from what size the fee covers it: as what covering it would take and what that does to being picked, never as a fee to set.
+- **Both monitors keep Market, Advisor, Maint and Tx on keys 4 to 7.** A page one monitor alone has (Demand, Books) goes on 3; the pages they share keep the same headings, hints and wording (`min` and `max`, `cheapest`).
 - **The board carries every pair.** An ad or a want is this provider's market only when its asset is the one `/info` names; `State::sift` keeps those and counts the rest.
 - **TAC amounts come from swap records, never from the chain.** An explorer sees sats; a row no swap names shows sats and says a note may ride on it.
-- **What an explorer is asked is bounded and said.** Two addresses, the transactions of `ledger::MAX_SWAPS` swaps, `feed::MAX_LOOKUPS` by id a round, none again once `ledger::SETTLED` deep, and whether a note sent away from the main address is spent for `feed::MAX_AWAY` transactions a round, taking turns, none again once it is. The Ethereum RPC is asked for the pool's lock log over at most `ledger::POOL_LOOKBACK` blocks, by contract and topic only: whose a lock is gets decided here, from the swap record's leaf, and never by a filter sent to the node. A new kind of request is a change to claim 4 in `SECURITY.md`.
+- **What an explorer is asked is bounded and said.** Two addresses, the transactions of `ledger::MAX_SWAPS` swaps, `chain::MAX_LOOKUPS` by id a round, none again once `ledger::SETTLED` deep, and whether a note sent away from the main address is spent for `feed::MAX_AWAY` transactions a round, taking turns, none again once it is. The Ethereum RPC is asked for the pool's lock log over at most `pool::POOL_LOOKBACK` blocks, by contract and topic only: whose a lock is gets decided here, from the swap record's leaf, and never by a filter sent to the node. A new kind of request is a change to claim 4 in `SECURITY.md`.
 - **Amounts from outside never wrap or truncate.** Sum with `model::total`, multiply through `model::fee_on`, narrow with `try_from`.
 - Amounts are TAC base units (8 decimal places) in `u128`; format them with `model::tac`.
 - Nothing leaves the machine that the operator did not configure.
@@ -96,7 +101,7 @@ For anyone changing this repo, human or agent.
 
 ### Documentation
 
-A change is not done until the documents describing what it changed are updated in the same change: `README.md`, `docs/fast-bridge.md`, this file, `SECURITY.md`, `config.example.toml`. The README is the short version: what a monitor's page, setting or command does in detail goes in the monitor's guide under `docs/`. A change that touches none of them can say so.
+A change is not done until the documents describing what it changed are updated in the same change: `README.md`, the monitor's guide (`docs/fast-bridge.md`, `docs/btc-eth.md`), this file, `SECURITY.md`, `config.example.toml`. The README is the short version: what a monitor's page, setting or command does in detail goes in the monitor's guide under `docs/`. A change that touches none of them can say so.
 
 ## Commits
 
@@ -122,4 +127,5 @@ A change is not done until the documents describing what it changed are updated 
 - A command the Maintenance page prints is built only from values `wire.rs` held to hex, decimal or bech32. A new value in one gets the same check, and a test with shell characters in it.
 - What needs the key comes through the `Inventory` port, behind `status_cmd`, and the `SilentCheck` port, behind `normalize_cmd`: a child process holds the key, tacmon reads its output. The only argument tacmon ever adds to either is `--txid <64 hex>`, which keeps the tool a dry run. Nothing is flagged as a silent send by its shape on the chain: only on that tool's word. Never read `FB_LP_KEY` or the environment file in the crate.
 - tacit's upkeep tools exit silently when started through a symlinked path: the helper `cd`s to the real path first.
+- `[shared]` is for a setting more than one monitor has under the same name and that is empty by default: empty is how a monitor says it has none of its own. A setting with a default of its own (`boards`) cannot be shared that way.
 - `config.example.toml` is generated: edit the defaults in the `config.rs` files, not the file.
