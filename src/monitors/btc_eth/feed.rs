@@ -222,7 +222,7 @@ mod tests {
         let id = |c: char| c.to_string().repeat(64);
         let tx = |c: char| ChainTx { txid: id(c), fee: 1, vsize: 1, ..Default::default() };
         let data = Memory {
-            info: Info { terms: Terms { min: 1, max: 2, ..Default::default() }, books: None },
+            info: Info { terms: Terms { min: 1, max: 2, ..Default::default() }, books: None, refill: None },
             eth: 0.25,
             quotes: Quotes { count: 3, last: None },
             // "a" is listed at the main address and so not asked about by id; "b" is known by id alone; "c" not at all

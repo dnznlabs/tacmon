@@ -56,6 +56,12 @@ pub fn eth(units: u128) -> String {
     format!("{}.{:05}", grouped(units / UNIT), (units % UNIT) / 1000)
 }
 
+/// "0.0199": an account's own ETH to four places, cut and never rounded up: just under a reserve must not read as
+/// the reserve. (The sliver added is far under a place: it only undoes what a binary fraction lost of a round figure.)
+pub fn eth_cut(e: f64) -> String {
+    format!("{:.4}", (e * 10_000.0 + 1e-6).floor() / 10_000.0)
+}
+
 /// The same for a figure that can be under zero (a net after costs).
 pub fn eth_signed(units: i128) -> String {
     format!("{}{}", if units < 0 { "−" } else { "" }, eth(units.unsigned_abs()))
@@ -264,10 +270,26 @@ pub struct Ad {
 }
 
 /// `/info`: the BTC→ETH terms, and the provider's books where its upkeep has made them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Info {
     pub terms: Terms,
     pub books: Option<Books>,
+    /// What the provider says of its own funding. `None` from a provider that does not report it.
+    pub refill: Option<Refill>,
+}
+
+/// The provider's own word on the ETH at its pool account: what it keeps there for gas, and whether it shields
+/// the rest itself. Each is `None` where the answer does not say. In ETH, as the provider prints them.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Refill {
+    /// The account's own ETH as the provider last read it.
+    pub public_eth: Option<f64>,
+    /// What it never touches, for gas: under this it warns.
+    pub gas_reserve_eth: Option<f64>,
+    /// The smallest amount over the reserve it would shield.
+    pub min_chunk_eth: Option<f64>,
+    /// Whether it shields what arrives on its own (`FB_LP_AUTO_SHIELD`).
+    pub auto_shield: Option<bool>,
 }
 
 /// What the provider's upkeep reports of itself. Every figure is the provider's own count, since `since`.
@@ -344,6 +366,13 @@ pub struct Buyback {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_accounts_eth_is_cut_to_four_places_and_a_round_figure_stays_round() {
+        let read = [0.019_986_738, 0.02, 0.059_997, 0.0].map(eth_cut);
+
+        assert_eq!(read, ["0.0199", "0.0200", "0.0599", "0.0000"]);
+    }
 
     #[test]
     fn sats_are_grouped_and_eth_is_cut_to_five_places_never_rounded_up() {

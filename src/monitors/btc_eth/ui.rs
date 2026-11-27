@@ -5,7 +5,6 @@ use super::{
     ledger::{POOL_SETTLED, Place, SETTLED, Status},
     model::*,
     state::{Page, REF_ETH, REF_SATS, State, shown_name},
-    upkeep::LOW_GAS_ETH,
 };
 use crate::{
     fmt::{dur, pct, short},
@@ -254,7 +253,7 @@ pub fn header_lines(st: &State, th: &Theme, width: u16) -> Vec<Line<'static>> {
             vec![
                 label("gas ETH "),
                 match st.eth {
-                    Some(e) => Span::styled(format!("{e:.4}"), bold.fg(if e < LOW_GAS_ETH { th.bad } else { Color::Reset })),
+                    Some(e) => Span::styled(eth_cut(e), bold.fg(if e < st.gas_reserve() { th.bad } else { Color::Reset })),
                     None => Span::styled("?", th.dim()),
                 },
             ]
@@ -901,7 +900,7 @@ fn maintenance(f: &mut Frame, area: Rect, st: &State, th: &Theme) {
         if st.shows_eth { label(" · gas ETH ") } else { Span::raw("") },
         match (st.shows_eth, st.eth) {
             (false, _) => Span::raw(""),
-            (true, Some(e)) => Span::styled(format!("{e:.4}"), Style::new().fg(if e < LOW_GAS_ETH { th.bad } else { Color::Reset })),
+            (true, Some(e)) => Span::styled(eth_cut(e), Style::new().fg(if e < st.gas_reserve() { th.bad } else { Color::Reset })),
             (true, None) => dash(),
         },
     ]));
@@ -1165,7 +1164,7 @@ mod tests {
         let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let terms = Terms { min: 50_000, max: 100_000, fee_bps: 30, flat: 1000, available: Some(20_000), ..Default::default() };
 
-        st.apply(Event::Info(Some(Box::new(Info { terms, books: None }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms, books: None, refill: None }))));
 
         let out = text(&header_lines(&st, &theme(), 200));
         assert!(out.contains("can take 20,000 sats (full: under its minimum)") && out.contains("no books yet"), "{out}");
@@ -1177,7 +1176,7 @@ mod tests {
         let mut st = State::new(&BtcEthConfig::default(), false, false, false);
         let books = Books { swaps: 3, loss_eth: 3_100_000, net_eth: Some(-3_000_000), ..Default::default() };
 
-        st.apply(Event::Info(Some(Box::new(Info { terms: Terms::default(), books: Some(books) }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: Terms::default(), books: Some(books), refill: None }))));
 
         let (head, page) = (text(&header_lines(&st, &theme(), 200)), drawn(&st, Page::Books));
         assert!(head.contains("LOST 0 sats · 0.03100 ETH") && head.contains("net −0.03000 ETH"), "{head}");
@@ -1227,7 +1226,7 @@ mod tests {
         };
         st.apply(Event::Reverse(Some(ReverseSide::Off)));
 
-        st.apply(Event::Info(Some(Box::new(Info { terms: Terms::default(), books: Some(books) }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: Terms::default(), books: Some(books), refill: None }))));
 
         let (head, page) = (text(&header_lines(&st, &theme(), 200)), drawn(&st, Page::Books));
         assert!(
@@ -1370,7 +1369,7 @@ mod tests {
         st.apply(Event::Log(LogEntry { signal: Some(Signal::StartPrice(Some(35.9))), ..LogEntry::plain(Level::Info, "x") }));
         let waiting = drawn_at(&st, Page::Advisor, 280);
         let books = Books { swaps: 1, cost_sats: 500, cost_eth: 26_000, ..Default::default() };
-        st.apply(Event::Info(Some(Box::new(Info { terms: mine.terms.clone(), books: Some(books) }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: mine.terms.clone(), books: Some(books), refill: None }))));
         let unread = drawn_at(&st, Page::Advisor, 280);
 
         st.apply(Event::Ads(Some(vec![mine, ad("other", "03aa", 25_000, 1_000_000, 20, 800)])));
@@ -1390,7 +1389,7 @@ mod tests {
     fn the_maintenance_page_lists_both_sides_and_marks_the_picked_command() {
         let mut st = State::new(&BtcEthConfig::default(), true, true, false);
         let terms = Terms { min: 25_000, max: 97_758, fee_bps: 20, flat: 399, available: Some(9_000), ..Default::default() };
-        st.apply(Event::Info(Some(Box::new(Info { terms, books: None }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms, books: None, refill: None }))));
         st.apply(Event::Health(Some(Health { ok: true, error: String::new() })));
         st.apply(Event::Reverse(Some(ReverseSide::Off)));
         // ETH that has arrived at the account and is not shielded: the first command is the shield tool's dry run
@@ -1410,7 +1409,7 @@ mod tests {
         assert!(
             page.contains("can take 9,000 sats now · takes 25,000 to 97,758 · fee 0.20% + 399")
                 && page.contains("gas ETH 0.0600")
-                && page.contains("node tools/fastbridge-lp-shield.mjs 0.0500 --eth"),
+                && page.contains("node tools/fastbridge-lp-shield.mjs 0.0400 --eth"),
             "{page}"
         );
         assert!(page.contains("▲ It can take 9,000 sats now, under its min of 25,000") && page.contains("status off"), "{page}");

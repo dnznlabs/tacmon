@@ -80,6 +80,8 @@ pub struct State {
     /// The BTC→ETH terms and the books as last read, and whether `/info` answered last time.
     pub terms: Option<Terms>,
     pub books: Option<Books>,
+    /// The provider's own word on its gas reserve and whether it shields by itself, as last read.
+    pub refill: Option<Refill>,
     pub info_ok: bool,
     /// `Some(true)` healthy, `Some(false)` the provider says its last tick failed, `None` it does not answer.
     pub healthy: Option<bool>,
@@ -173,6 +175,7 @@ impl State {
             cap_at: None,
             terms: None,
             books: None,
+            refill: None,
             info_ok: false,
             healthy: None,
             health_error: String::new(),
@@ -247,6 +250,7 @@ impl State {
                     self.terms = Some(i.terms);
                     // an answer without books is a provider whose upkeep has not looked yet: the last books are not kept as its word
                     self.books = i.books;
+                    self.refill = i.refill;
                     if pair != self.pair {
                         self.pair = pair;
                         self.sift();
@@ -408,6 +412,11 @@ impl State {
         Some(Held { confirmed: sum(true)?, unconfirmed: sum(false)?, coins: coins?.len() })
     }
 
+    /// What the provider keeps at its pool account for gas: its own word, or Tacit's default where it does not say.
+    pub fn gas_reserve(&self) -> f64 {
+        self.refill.and_then(|r| r.gas_reserve_eth).unwrap_or(upkeep::GAS_RESERVE_ETH)
+    }
+
     /// The Maintenance page's steps.
     pub fn upkeep(&self) -> Vec<Step> {
         let stuck = self.stuck();
@@ -425,6 +434,9 @@ impl State {
             reverse_held: Self::held(self.reverse_coins.as_deref()),
             pool_account: &self.id.pool_account,
             gas: self.eth,
+            gas_reserve: self.gas_reserve(),
+            min_chunk: self.refill.and_then(|r| r.min_chunk_eth).unwrap_or(upkeep::MIN_CHUNK_ETH),
+            auto_shield: self.refill.and_then(|r| r.auto_shield),
             priced: self.priced,
             on_board: self.on_board(),
             stuck: &stuck,
@@ -701,7 +713,7 @@ mod tests {
     #[test]
     fn a_failed_read_keeps_the_last_value_and_marks_the_source() {
         let mut st = state();
-        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(Books { swaps: 4, ..Default::default() }) }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(Books { swaps: 4, ..Default::default() }), refill: None }))));
         st.apply(Event::Swaps(Some(vec![swap(Direction::Forward, "done", 1, 100_000, 3_100_000)])));
         st.apply(Event::Reverse(Some(ReverseSide::Off)));
         st.apply(Event::Ads(Some(Vec::new())));
@@ -721,9 +733,9 @@ mod tests {
     #[test]
     fn an_answer_without_books_takes_the_last_books_off_the_screen() {
         let mut st = state();
-        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(Books { swaps: 4, ..Default::default() }) }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(Books { swaps: 4, ..Default::default() }), refill: None }))));
 
-        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: None }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: None, refill: None }))));
 
         assert!(st.info_ok && st.books.is_none());
     }
@@ -755,7 +767,7 @@ mod tests {
         let stock = Stock { eth: 50_000_000, sats: Some(1_000_000), value_eth: 82_000_000, at: 500, ..Default::default() };
         st.apply(signal(Signal::StartPrice(Some(31.0)), Some(100)));
 
-        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(Books { stock: Some(stock), ..Default::default() }) }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(Books { stock: Some(stock), ..Default::default() }), refill: None }))));
 
         assert_eq!(st.price(), Some((32.0, Some(500), "upkeep")));
     }
@@ -799,7 +811,7 @@ mod tests {
             reverse_terms: None,
         };
         st.apply(signal(Signal::Started(Identity { claim_pub: "02me".into(), ..Default::default() }), None));
-        st.apply(Event::Info(Some(Box::new(Info { terms: Terms { btc_asset: sats_asset, evm_asset: eth_asset, ..terms(30) }, books: None }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: Terms { btc_asset: sats_asset, evm_asset: eth_asset, ..terms(30) }, books: None, refill: None }))));
 
         st.apply(Event::Ads(Some(vec![
             ad("dear", "03aa", 90, sats_asset),
@@ -832,7 +844,7 @@ mod tests {
         let mut st = state();
         let stock = Stock { eth: 6_974_000, sats: Some(0), value_eth: 6_974_000, at: 500, ..Default::default() };
         let books = |notes: Notes| Books { stock: Some(stock.clone()), notes: Some(notes), ..Default::default() };
-        let info = |b: Books| Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(b) })));
+        let info = |b: Books| Event::Info(Some(Box::new(Info { terms: terms(30), books: Some(b), refill: None })));
         st.apply(Event::Reverse(Some(ReverseSide::Off)));
 
         // as a provider with the reverse side off reports itself: sats of "0", and no notes beside the ETH it holds
@@ -912,7 +924,7 @@ mod tests {
         };
         let mine = ad("02me", 20_000, 97_758, 15, 500, Some(97_758));
         st.apply(signal(Signal::Started(Identity { claim_pub: "02me".into(), ..Default::default() }), None));
-        st.apply(Event::Info(Some(Box::new(Info { terms: mine.terms.clone(), books: None }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: mine.terms.clone(), books: None, refill: None }))));
 
         // one takes from 25,000 and charges more; one is cheaper at any size and has nothing left for the larger
         st.apply(Event::Ads(Some(vec![mine, ad("03aa", 25_000, 1_000_000, 20, 800, None), ad("03bb", 20_000, 500_000, 5, 100, Some(30_000))])));
@@ -927,7 +939,7 @@ mod tests {
         let ad = |key: &str, bps| Ad { name: key.into(), claim_pub: key.into(), terms: terms(bps), reverse: false, reverse_terms: None };
         st.apply(signal(Signal::Started(Identity { claim_pub: "02me".into(), ..Default::default() }), None));
         // the provider now charges 0.30%; the board still carries its ad at 0.10%
-        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: None }))));
+        st.apply(Event::Info(Some(Box::new(Info { terms: terms(30), books: None, refill: None }))));
 
         st.apply(Event::Ads(Some(vec![ad("02me", 10), ad("03aa", 90)])));
         st.apply(Event::Quotes(Some(Quotes { count: 2, last: Some(5) })));

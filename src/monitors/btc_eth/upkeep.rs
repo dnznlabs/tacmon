@@ -7,18 +7,16 @@
 
 use super::{
     ledger::TxRow,
-    model::{Level, Notes, ReverseSide, Step, Terms, eth, rate, sats},
+    model::{Level, Notes, ReverseSide, Step, Terms, eth, eth_cut, rate, sats},
 };
 use crate::fmt::{dur, short};
 
 /// Tacit's setup tool, run from a tacit checkout as the user the provider runs as: it reads the key itself.
 pub const SETUP: &str = "node fastbridge-lp/setup.mjs";
-/// Under this much ETH of its own, the pool account cannot pay for many of the settles it sends itself.
-pub const LOW_GAS_ETH: f64 = 0.002;
-/// What Tacit's tools leave at the pool account for gas, and the least over it worth shielding: under that, the
-/// deposit's own gas is a fair share of it.
-pub const GAS_KEPT_ETH: f64 = 0.01;
-pub const WORTH_SHIELDING_ETH: f64 = 0.005;
+/// What a provider keeps at its pool account for gas, and the least over that it would shield, where it does not
+/// say itself: Tacit's own defaults (`FB_LP_SHIELD_RESERVE_ETH`, `FB_LP_SHIELD_MIN_ETH`).
+pub const GAS_RESERVE_ETH: f64 = 0.02;
+pub const MIN_CHUNK_ETH: f64 = 0.02;
 /// Tacit's tool that puts ETH of the pool account into the pool. Without `--send` it only checks.
 pub const SHIELD: &str = "node tools/fastbridge-lp-shield.mjs";
 /// The least a provider of the pair may set as its smallest swap: under it a take at a busy fee would leave dust.
@@ -117,6 +115,11 @@ pub struct Facts<'a> {
     pub pool_account: &'a str,
     /// The pool account's own ETH, where it is read.
     pub gas: Option<f64>,
+    /// What the provider keeps there for gas, and the least over it worth shielding: its own word, or the defaults.
+    pub gas_reserve: f64,
+    pub min_chunk: f64,
+    /// Whether the provider shields what arrives by itself. `None`: it does not say.
+    pub auto_shield: Option<bool>,
     pub priced: Option<bool>,
     pub on_board: Option<bool>,
     /// The Tx page's stuck rows that are the provider's own.
@@ -229,27 +232,40 @@ pub fn upkeep(f: &Facts) -> Vec<Step> {
         });
     }
 
-    // ETH at the account is not lent: only what is shielded into the pool is, and the running provider shields none
-    if let Some(over) = f.gas.map(|g| g - GAS_KEPT_ETH).filter(|over| *over >= WORTH_SHIELDING_ETH) {
-        // cut to four places, never rounded up: the tool refuses more than the account can spare
-        // (the sliver added is far under a place: it only undoes what a binary fraction lost of a round figure)
-        let amount = format!("{:.4}", (over * 10_000.0 + 1e-6).floor() / 10_000.0);
+    // ETH at the account is not lent: only what is shielded into the pool is. Under the provider's reserve it is
+    // gas and not to be shielded; over it by a chunk, it waits for a shield
+    if let Some(over) = f.gas.map(|g| g - f.gas_reserve).filter(|over| *over + 1e-9 >= f.min_chunk) {
+        // cut, never rounded up: the tool refuses more than the account can spare
+        let (amount, held) = (eth_cut(over), eth_cut(over + f.gas_reserve));
+        let reserve = eth_cut(f.gas_reserve);
+        steps.push(if f.auto_shield == Some(true) {
+            step(
+                Level::Info,
+                format!("Its pool account holds {held} ETH of its own, {amount} over the {reserve} it keeps for gas. Nothing to run: the provider shields it by itself, a chunk at a time."),
+                vec![],
+            )
+        } else {
+            step(
+                Level::Warn,
+                format!(
+                    "Its pool account holds {held} ETH of its own, {amount} over the {reserve} it keeps for gas. ETH sent there is not lent until it is shielded \
+                     into the pool, and this provider does not do that by itself. Tacit's shield tool does (from a tacit checkout, as the provider's user, while \
+                     no swap is under way). This is its dry run: it checks and sends nothing; add --send to send it. Then raise `quote.maxAmount` (below). Or \
+                     set FB_LP_AUTO_SHIELD=on in the provider's environment, and it shields what arrives from then on."
+                ),
+                f.place.shield(Some(&amount)),
+            )
+        });
+    }
+    if let Some(g) = f.gas.filter(|g| *g < f.gas_reserve) {
         steps.push(step(
             Level::Warn,
             format!(
-                "Its pool account holds {:.4} ETH of its own, {amount} over the {GAS_KEPT_ETH} kept for gas. ETH sent there is not lent until it is shielded \
-                 into the pool, and the running provider does not do that. Tacit's shield tool does (from a tacit checkout, as the provider's user, while no \
-                 swap is under way). This is its dry run: it checks and sends nothing; add --send to send it. Then raise `quote.maxAmount` (below).",
-                over + GAS_KEPT_ETH
+                "Its pool account holds {} ETH of its own, under the {} it keeps for gas: that pays for the settles and deposits it sends itself. Send ETH to \
+                 {account}; it stays there as gas and is not to be shielded.",
+                eth_cut(g),
+                eth_cut(f.gas_reserve)
             ),
-            f.place.shield(Some(&amount)),
-        ));
-    }
-
-    if let Some(g) = f.gas.filter(|g| *g < LOW_GAS_ETH) {
-        steps.push(step(
-            Level::Warn,
-            format!("Its pool account holds {g:.4} ETH of its own, under {LOW_GAS_ETH}: that pays for the settles it sends when the relay does not. Send ETH to {account}."),
             vec![],
         ));
     }
@@ -390,6 +406,9 @@ mod tests {
             reverse_held: None,
             pool_account: "0xpool",
             gas: None,
+            gas_reserve: GAS_RESERVE_ETH,
+            min_chunk: MIN_CHUNK_ETH,
+            auto_shield: None,
             priced: None,
             on_board: None,
             stuck: &[],
@@ -488,7 +507,7 @@ mod tests {
         };
         assert!(held(0, 140_000).contains("It holds 0 sats confirmed now, and 140,000 more not yet confirmed: under that."), "{}", held(0, 140_000));
         assert!(held(140_000, 0).contains("It holds 140,000 sats confirmed now: enough, so setup is all that is left."), "{}", held(140_000, 0));
-        assert!(said(&read[0], "holds 0.0004 ETH of its own").is_some_and(|s| s.text.contains("0xpool")));
+        assert!(said(&read[0], "holds 0.0004 ETH of its own, under the 0.0200").is_some_and(|s| s.text.contains("0xpool")));
     }
 
     #[test]
@@ -531,17 +550,31 @@ mod tests {
     }
 
     #[test]
-    fn eth_sitting_at_the_pool_account_is_named_with_the_shield_tools_dry_run_and_gas_alone_is_not() {
+    fn eth_over_the_providers_gas_reserve_waits_for_a_shield_and_eth_under_it_is_gas() {
         let p = place();
+        let with = |gas: f64| upkeep(&Facts { gas: Some(gas), ..facts(&p) });
 
-        let (arrived, gas_only, unread) =
-            (upkeep(&Facts { gas: Some(0.059997), ..facts(&p) }), upkeep(&Facts { gas: Some(0.0139), ..facts(&p) }), upkeep(&Facts { gas: None, ..facts(&p) }));
+        let (arrived, gas_only, short, unread) = (with(0.069_997), with(0.03), with(0.019_986_738), upkeep(&facts(&p)));
 
         let step = said(&arrived, "is not lent until it is shielded").expect("a step");
-        // 0.049997 over the 0.01 kept: cut to four places, not rounded up to more than is there
-        assert!(step.level == Level::Warn && step.text.contains("holds 0.0600 ETH of its own, 0.0499 over"), "{}", step.text);
+        // 0.049997 over the 0.02 kept: cut to four places, not rounded up to more than is there
+        assert!(step.level == Level::Warn && step.text.contains("holds 0.0699 ETH of its own, 0.0499 over the 0.0200"), "{}", step.text);
         assert_eq!(step.cmd, ["FB_LP_KEY=$(cat /var/lib/lp-btc/provider.key)", "  node tools/fastbridge-lp-shield.mjs 0.0499 --eth"]);
-        assert!(said(&gas_only, "is not lent").is_none() && said(&unread, "is not lent").is_none());
+        // 0.01 over the reserve is under a chunk: it is gas, and nobody is told to shield it
+        assert!(said(&gas_only, "is not lent").is_none() && said(&gas_only, "under the").is_none() && said(&unread, "is not lent").is_none());
+        // a hair under the reserve is under it, and is not drawn as the reserve
+        assert!(said(&short, "holds 0.0199 ETH of its own, under the 0.0200 it keeps for gas").is_some_and(|s| s.text.contains("0xpool")));
+    }
+
+    #[test]
+    fn the_providers_own_reserve_and_chunk_decide_and_one_that_shields_by_itself_is_left_to_it() {
+        let p = place();
+        let own = Facts { gas: Some(0.08), gas_reserve: 0.05, min_chunk: 0.01, ..facts(&p) };
+
+        let (by_hand, by_itself) = (upkeep(&own), upkeep(&Facts { auto_shield: Some(true), ..own }));
+
+        assert!(said(&by_hand, "0.0300 over the 0.0500").is_some_and(|s| s.level == Level::Warn && s.cmd.len() == 2));
+        assert!(said(&by_itself, "shields it by itself").is_some_and(|s| s.level == Level::Info && s.cmd.is_empty()));
     }
 
     #[test]

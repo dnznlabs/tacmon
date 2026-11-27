@@ -159,7 +159,7 @@ The provider looks after most of itself: it merges its notes, moves take coins t
 a slow take or lock. The Maintenance page lists each direction's state, then what is left for a hand, most urgent
 first: a provider that does not answer or has no price, a swap that ended with nothing received, a stuck
 transaction, a side that can take less than its min, ETH that has arrived at the pool account and is not shielded,
-gas ETH running low, an ad that is not on the board. A step
+gas ETH under the provider's reserve, an ad that is not on the board. A step
 that a command helps with has it printed underneath. `↑` and `↓` scroll; `shift+↑` and `shift+↓` (or `K` and `J`)
 pick a command, and `c` (or Enter) copies it through the terminal's clipboard (OSC 52).
 
@@ -177,10 +177,19 @@ The first three run from a tacit checkout, as the user the provider runs as. Set
 shield tool takes the key in its environment, which the operator's shell fills from the key file. tacmon reads
 neither.
 
-ETH sent to the pool account is not lent until it is shielded into the pool, and the running provider shields
-none. With `eth_rpc` set, the page says when the account holds more than the 0.01 ETH kept for gas and prints the
-shield tool's dry run for the rest. Setup does not do this for a provider that is already funded: it shields only
-while the provider holds less than two swaps of its min. After a shield, raise `quote.maxAmount` by hand.
+ETH sent to the pool account is not lent until it is shielded into the pool. A provider keeps a reserve there for
+gas and, with `FB_LP_AUTO_SHIELD=on` in its environment, shields what arrives over it by itself; without that
+switch nothing does. The page takes the reserve, the smallest amount worth shielding and whether the provider
+shields by itself from the provider's own `/info` (`refill`), and Tacit's defaults of 0.02 ETH each where a
+provider does not say. With `eth_rpc` set:
+
+- under the reserve, it says to send ETH for gas, which stays at the account and is not to be shielded;
+- over the reserve by the smallest amount or more, it prints the shield tool's dry run for what is over, or says
+  there is nothing to run where the provider shields by itself.
+
+Setup does not shield for a provider that is already funded: it shields only while the provider holds less than
+two swaps of its min. After a shield by hand, raise `quote.maxAmount`. The account's own ETH is shown cut to four
+places, never rounded up: a figure just under the reserve does not read as the reserve.
 
 Running setup again is Tacit's way to turn ETH→BTC on once Bitcoin has confirmed at the reverse address. It writes
 the limits in `config.json` afresh from what is funded, so a size set by hand is set again; the fee is kept. The

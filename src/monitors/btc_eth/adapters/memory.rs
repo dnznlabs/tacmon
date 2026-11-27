@@ -206,7 +206,7 @@ pub fn create_demo_ports(now: u64) -> Ports {
         buyback: Some(Buyback { on: false, routed_eth: 0, sends: 0 }),
     };
     let data = Memory {
-        info: Info { terms: terms.clone(), books: Some(books) },
+        info: Info { terms: terms.clone(), books: Some(books), refill: None },
         health: Health { ok: true, error: String::new() },
         reverse: ReverseSide::On { terms: reverse_terms.clone(), open: Some(1), max_open: 2 },
         ads: vec![

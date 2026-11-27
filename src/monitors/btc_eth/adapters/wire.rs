@@ -4,8 +4,8 @@
 pub use crate::monitors::common::wire::{eth_address, health};
 use crate::monitors::{
     btc_eth::model::{
-        Ad, Books, Buyback, Capacity, Direction, Fee, Identity, Info, Level, LogEntry, Notes, ReverseSide, Role, Said, Signal, Stock, Swap, Target, Terms, eth,
-        sats,
+        Ad, Books, Buyback, Capacity, Direction, Fee, Identity, Info, Level, LogEntry, Notes, Refill, ReverseSide, Role, Said, Signal, Stock, Swap, Target,
+        Terms, eth, sats,
     },
     common::wire::{asset, btc_address, field, kept, log_detail, log_head, small, text, txid, units, word32},
 };
@@ -95,7 +95,18 @@ fn books(v: &Value) -> Option<Books> {
 
 /// `/info`. `None` for an answer without terms: it is a failed read.
 pub fn info(v: &Value) -> Option<Info> {
-    Some(Info { terms: terms(v)?, books: books(v) })
+    Some(Info { terms: terms(v)?, books: books(v), refill: v.get("refill").filter(|r| r.is_object()).map(refill) })
+}
+
+/// `/info`'s `refill`: amounts of ETH as decimal text. One that is not a plain amount is left out, not read as zero.
+fn refill(r: &Value) -> Refill {
+    let amount = |key: &str| r.get(key).and_then(Value::as_str).and_then(|t| t.parse::<f64>().ok()).filter(|a| a.is_finite() && *a >= 0.0);
+    Refill {
+        public_eth: amount("publicEth"),
+        gas_reserve_eth: amount("gasReserveEth"),
+        min_chunk_eth: amount("minChunkEth"),
+        auto_shield: r.get("autoShield").and_then(|a| a.get("on")).and_then(Value::as_bool),
+    }
 }
 
 /// `/reverse/info`. `None` for an answer without terms: it is a failed read, not a side with nothing to sell.
@@ -286,6 +297,22 @@ mod tests {
 
         assert!(no_terms.is_none());
         assert_eq!(no_books.map(|i| (i.terms.fee_bps, i.terms.available, i.books)), Some((30, None, None)));
+    }
+
+    #[test]
+    fn the_providers_word_on_its_gas_is_read_and_an_amount_that_is_not_one_is_left_out() {
+        let base = json!({ "minAmount": "50000", "maxAmount": "100000", "feeBps": 30, "flatFee": "1000" });
+        let with = |refill: Value| {
+            let mut v = base.clone();
+            v["refill"] = refill;
+            info(&v).and_then(|i| i.refill)
+        };
+
+        let said = with(json!({ "publicEth": "0.0200", "gasReserveEth": "0.0200", "minChunkEth": "0.0500", "autoShield": { "on": true } }));
+        let odd = with(json!({ "publicEth": null, "gasReserveEth": "-1", "minChunkEth": 3, "autoShield": {} }));
+
+        assert_eq!(said, Some(Refill { public_eth: Some(0.02), gas_reserve_eth: Some(0.02), min_chunk_eth: Some(0.05), auto_shield: Some(true) }));
+        assert_eq!((odd, info(&base).and_then(|i| i.refill)), (Some(Refill::default()), None));
     }
 
     #[test]
